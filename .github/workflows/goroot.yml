@@ -14,8 +14,8 @@ on:
         default: main
         type: string
   schedule:
-    # 02:00 Asia/Shanghai (18:00 UTC on the previous day), every 3 days.
-    - cron: "0 18 */3 * *"
+    # 01:00 Asia/Shanghai (17:00 UTC on the previous day), daily.
+    - cron: "0 17 * * *"
 
 permissions:
   contents: read

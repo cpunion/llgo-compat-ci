@@ -14,8 +14,8 @@ on:
         default: main
         type: string
   schedule:
-    # 03:00 Asia/Shanghai (19:00 UTC on the previous day).
-    - cron: "0 19 * * *"
+    # 04:00 Asia/Shanghai (20:00 UTC on the previous day), daily.
+    - cron: "0 20 * * *"
 
 concurrency:
   # Periodic compatibility runs are reports, so a later invocation must not
