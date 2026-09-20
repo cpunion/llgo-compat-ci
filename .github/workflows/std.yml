@@ -183,9 +183,38 @@ jobs:
           export LLGO_TEST_LLGEN="$RUNNER_TEMP/llgo-bin/llgen${tool_suffix}"
           export CHECK_STD_SYMBOLS="$RUNNER_TEMP/llgo-bin/check_std_symbols${tool_suffix}"
           if [[ "${{ matrix.lane }}" == compatibility ]]; then
-            dev/test_go_versions.sh 1.20 1.21 1.22 1.23 1.24 1.25 1.26
+            run_version() {
+              local version=$1
+              shift
+              local cache_dir="$RUNNER_TEMP/std-version-cache/go${version}"
+              mkdir -p "$cache_dir"
+              XDG_CACHE_HOME="$cache_dir" dev/test_go_version.sh "$version" "$@"
+            }
+            failed_versions=()
+            for version in 1.20 1.21 1.22 1.23 1.24 1.25 1.26; do
+              packages=()
+              case "$version" in
+                1.20|1.21) packages=(./test/std/bufio ./test/std/bytes ./test/std/encoding/json ./test/std/math/bits) ;;
+                1.22) packages=(./test/std/bufio ./test/std/bytes ./test/std/encoding/json ./test/std/go/version) ;;
+                1.23) packages=(./test/std/iter ./test/std/maps ./test/std/slices ./test/std/structs ./test/std/unique) ;;
+                1.24) packages=(./test/std/bytes ./test/std/crypto/hkdf ./test/std/crypto/pbkdf2 ./test/std/weak) ;;
+                1.25) packages=(./test/std/crypto ./test/std/crypto/ecdsa ./test/std/crypto/sha3 ./test/std/go/ast ./test/std/go/token ./test/std/go/types ./test/std/hash ./test/std/hash/maphash ./test/std/io/fs ./test/std/log/slog ./test/std/mime/multipart ./test/std/net/http ./test/std/os ./test/std/reflect ./test/std/runtime/trace ./test/std/sync ./test/std/testing ./test/std/testing/fstest ./test/std/testing/synctest ./test/std/unicode) ;;
+                1.26) packages=(./test/std/bytes ./test/std/crypto ./test/std/crypto/ecdh ./test/std/crypto/fips140 ./test/std/crypto/hpke ./test/std/crypto/mlkem ./test/std/crypto/mlkem/mlkemtest ./test/std/crypto/rsa ./test/std/crypto/x509 ./test/std/errors ./test/std/go/ast ./test/std/go/token ./test/std/log/slog ./test/std/net ./test/std/net/http ./test/std/net/netip ./test/std/os ./test/std/reflect ./test/std/testing ./test/std/testing/cryptotest) ;;
+              esac
+              if ! run_version "$version" "${packages[@]}"; then
+                failed_versions+=("$version")
+              fi
+            done
+            if [[ ${#failed_versions[@]} -ne 0 ]]; then
+              printf 'versioned standard-library test failures:' >&2
+              printf ' Go %s' "${failed_versions[@]}" >&2
+              printf '\n' >&2
+              exit 1
+            fi
           else
-            dev/test_go_version.sh "${{ matrix.go_version }}"
+            # Pass the std tree explicitly so this external compatibility lane
+            # never picks up test/goroot from older LLGo source revisions.
+            dev/test_go_version.sh "${{ matrix.go_version }}" ./test/std/...
           fi
 
       - name: Check std symbol coverage
@@ -464,16 +493,58 @@ jobs:
         if: always()
         run: |
           report_md="$RUNNER_TEMP/std-report.md"
-          go run ./dev/stdreport \
-            -native-reports native-reports \
-            -wasm-reports wasm-reports \
-            -run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            -mention-on-failure "fennoai" \
-            -native-result "${{ needs.native.result }}" \
-            -wasm-result "${{ needs.wasm-std.result }}" \
-            -browser-result "${{ needs.wasm-browser.result }}" \
-            -sentinels-result "${{ needs.wasm-sentinels.result }}" \
-            -output "$report_md"
+          if [[ -d dev/stdreport ]]; then
+            go run ./dev/stdreport \
+              -native-reports native-reports \
+              -wasm-reports wasm-reports \
+              -run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              -mention-on-failure "fennoai" \
+              -native-result "${{ needs.native.result }}" \
+              -wasm-result "${{ needs.wasm-std.result }}" \
+              -browser-result "${{ needs.wasm-browser.result }}" \
+              -sentinels-result "${{ needs.wasm-sentinels.result }}" \
+              -output "$report_md"
+          else
+            # Keep the workflow usable with LLGo revisions from before the
+            # structured stdreport helper was added. The source under test is
+            # still authoritative; this fallback only formats uploaded data.
+            {
+              echo '## Standard library compatibility summary'
+              echo
+              echo "[Workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+              echo
+              echo '| Suite | Result |'
+              echo '|---|---|'
+              echo '| Native compatibility and full std | ${{ needs.native.result }} |'
+              echo '| WebAssembly std acceptance | ${{ needs.wasm-std.result }} |'
+              echo '| Browser callback | ${{ needs.wasm-browser.result }} |'
+              echo '| WebAssembly GOROOT sentinels | ${{ needs.wasm-sentinels.result }} |'
+              echo
+              echo '### Native shards'
+              echo
+              echo '| Platform | Lane | Go | Shard | Result |'
+              echo '|---|---|---:|---:|---|'
+              if [[ -d native-reports ]]; then
+                find native-reports -type f -name 'summary-*.tsv' -exec cat {} + | sort | \
+                  awk -F '\t' '{printf "| %s | %s | %s | %s/%s | %s |\n", $1, $2, $3, $4, $5, $6}'
+              fi
+              echo
+              echo '### WebAssembly acceptance shards'
+              echo
+              echo '| Profile | Shard | Packages | Passed | Failed / unresolved |'
+              echo '|---|---:|---:|---:|---:|'
+              if [[ -d wasm-reports ]]; then
+                while IFS= read -r report; do
+                  jq -r '[.profile, ((.shard|tostring) + "/" + (.shards|tostring)), (.packages|length|tostring), ([.packages[] | select(.status == "pass")]|length|tostring), ([.packages[] | select(.status != "pass" and .status != "not-applicable" and .status != "separate-suite" and .status != "other-shard")]|length|tostring)] | "| " + join(" | ") + " |"' "$report"
+                done < <(find wasm-reports -type f -name acceptance.json | sort)
+              fi
+              if [[ "${{ needs.native.result }}" != success || "${{ needs.wasm-std.result }}" != success || "${{ needs.wasm-browser.result }}" != success || "${{ needs.wasm-sentinels.result }}" != success ]]; then
+                echo
+                echo '> [!WARNING]'
+                echo '> One or more compatibility suites failed. @fennoai please review the failed jobs.'
+              fi
+            } >"$report_md"
+          fi
 
           cat "$report_md" >>"$GITHUB_STEP_SUMMARY"
           echo "STD_REPORT=$report_md" >>"$GITHUB_ENV"
