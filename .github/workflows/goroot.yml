@@ -93,8 +93,9 @@ jobs:
             shard-index: "6"
             shard-total: "8"
         include:
-          # Each pair exactly partitions the excluded 1/8 shard and its paired
-          # Go-version shard while adding only one hosted-runner job.
+          # These entries exactly partition the excluded 1/8 shards and their
+          # paired Go-version shards. The two heaviest 1/16 subshards use 1/32
+          # partitions; the others stop at 1/16 to limit hosted-runner jobs.
           - os: windows-11-arm
             windows_abi: msvc
             windows_arch: arm64
@@ -111,8 +112,14 @@ jobs:
             windows_abi: msvc
             windows_arch: arm64
             shard-index: "1"
-            shard-total: "16"
+            shard-total: "32"
             paired-shard-index: "5"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "17"
+            shard-total: "32"
+            paired-shard-index: "21"
           - os: windows-11-arm
             windows_abi: msvc
             windows_arch: arm64
@@ -123,8 +130,14 @@ jobs:
             windows_abi: msvc
             windows_arch: arm64
             shard-index: "5"
-            shard-total: "16"
+            shard-total: "32"
             paired-shard-index: "1"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "21"
+            shard-total: "32"
+            paired-shard-index: "17"
           - os: windows-11-arm
             windows_abi: msvc
             windows_arch: arm64
@@ -779,7 +792,7 @@ jobs:
           {
             echo '## GOROOT run summary'
             echo
-            echo "Received $report_count/168 shard reports."
+            echo "Received $report_count/172 shard reports."
             echo
             echo '| Platform / toolchain | Shards | Selected | Observed | Passed | Failed | Skipped |'
             echo '|---|---:|---:|---:|---:|---:|---:|'
@@ -787,7 +800,7 @@ jobs:
               write_row "🍎 macOS · 🦾 ARM64 · Go $version" darwin/arm64 "$version" 8
               write_row "🐧 Linux · 🖥️ AMD64 · Go $version" linux/amd64 "$version" 8
               write_row "🪟 Windows · 🟦 MSVC · 🖥️ AMD64 · Go $version" windows-msvc/amd64 "$version" 8
-              write_row "🪟 Windows · 🟦 MSVC · 🦾 ARM64 · Go $version" windows-msvc/arm64 "$version" 12
+              write_row "🪟 Windows · 🟦 MSVC · 🦾 ARM64 · Go $version" windows-msvc/arm64 "$version" 14
               write_row "🪟 Windows · 🟦 MSVC · 💾 386 · Go $version" windows-msvc/386 "$version" 8
               write_row "🪟 Windows · 🦬 GNU · 🖥️ AMD64 · Go $version" windows-mingw/amd64 "$version" 8
               write_row "🪟 Windows · 🦬 GNU · 🦾 ARM64 · Go $version" windows-mingw/arm64 "$version" 8
@@ -849,8 +862,8 @@ jobs:
           GOROOT_RESULT: ${{ needs.goroot.result }}
           WASM_RESULT: ${{ needs.goroot-wasm.result }}
         run: |
-          if [[ "$GOROOT_REPORT_COUNT" -ne 168 ]]; then
-            echo "error: expected 168 shard reports, got $GOROOT_REPORT_COUNT" >&2
+          if [[ "$GOROOT_REPORT_COUNT" -ne 172 ]]; then
+            echo "error: expected 172 shard reports, got $GOROOT_REPORT_COUNT" >&2
             exit 1
           fi
           if [[ "$GOROOT_RESULT" != success || "$WASM_RESULT" != success ]]; then
