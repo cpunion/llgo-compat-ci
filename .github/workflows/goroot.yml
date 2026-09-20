@@ -69,16 +69,68 @@ jobs:
             windows_arch: amd64
           - os: windows-11-arm
             windows_arch: "386"
-          # MSVC/ARM64 shard 6 repeatedly outlived its hosted runner. Split
-          # only that shard below instead of multiplying the whole matrix.
+          # These MSVC/ARM64 shards have outlived or lost their hosted runner.
+          # Split only the affected shards below instead of multiplying the
+          # whole Windows ARM matrix.
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "0"
+            shard-total: "8"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "1"
+            shard-total: "8"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "5"
+            shard-total: "8"
           - os: windows-11-arm
             windows_abi: msvc
             windows_arch: arm64
             shard-index: "6"
             shard-total: "8"
         include:
-          # These two half-shards exactly partition Go 1.26 shard 6/8 and the
-          # paired Go 1.27 shard 2/8 while adding only one hosted-runner job.
+          # Each pair exactly partitions the excluded 1/8 shard and its paired
+          # Go-version shard while adding only one hosted-runner job.
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "0"
+            shard-total: "16"
+            paired-shard-index: "4"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "8"
+            shard-total: "16"
+            paired-shard-index: "12"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "1"
+            shard-total: "16"
+            paired-shard-index: "5"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "9"
+            shard-total: "16"
+            paired-shard-index: "13"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "5"
+            shard-total: "16"
+            paired-shard-index: "1"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "13"
+            shard-total: "16"
+            paired-shard-index: "9"
           - os: windows-11-arm
             windows_abi: msvc
             windows_arch: arm64
