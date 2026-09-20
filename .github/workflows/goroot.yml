@@ -20,10 +20,6 @@ on:
 permissions:
   contents: read
 
-env:
-  LLGO_SOURCE_REPOSITORY: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-  LLGO_SOURCE_REF: ${{ inputs.llgo_ref || 'main' }}
-
 concurrency:
   # Periodic compatibility runs are reports, so a later invocation must not
   # cancel one that has already consumed hosted-runner time.
@@ -99,8 +95,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: ${{ env.LLGO_SOURCE_REPOSITORY }}
-          ref: ${{ env.LLGO_SOURCE_REF }}
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
@@ -375,8 +371,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: ${{ env.LLGO_SOURCE_REPOSITORY }}
-          ref: ${{ env.LLGO_SOURCE_REF }}
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
@@ -600,8 +596,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: ${{ env.LLGO_SOURCE_REPOSITORY }}
-          ref: ${{ env.LLGO_SOURCE_REF }}
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
 
       - name: Set up Go for the report generator
         uses: ./.github/actions/setup-go

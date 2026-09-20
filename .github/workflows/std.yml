@@ -26,10 +26,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  LLGO_SOURCE_REPOSITORY: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-  LLGO_SOURCE_REF: ${{ inputs.llgo_ref || 'main' }}
-
 jobs:
   native:
     name: std (${{ matrix.lane }}, ${{ matrix.os }}${{ matrix.windows_abi && format(', {0}', matrix.windows_abi) || '' }}${{ matrix.windows_arch && format(', {0}', matrix.windows_arch) || '' }}, Go ${{ matrix.go_version }}, shard ${{ matrix.shard_index }}/${{ matrix.shard_total }})
@@ -134,8 +130,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: ${{ env.LLGO_SOURCE_REPOSITORY }}
-          ref: ${{ env.LLGO_SOURCE_REF }}
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
         with:
@@ -251,8 +247,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: ${{ env.LLGO_SOURCE_REPOSITORY }}
-          ref: ${{ env.LLGO_SOURCE_REF }}
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
@@ -328,8 +324,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: ${{ env.LLGO_SOURCE_REPOSITORY }}
-          ref: ${{ env.LLGO_SOURCE_REF }}
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
@@ -366,8 +362,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: ${{ env.LLGO_SOURCE_REPOSITORY }}
-          ref: ${{ env.LLGO_SOURCE_REF }}
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
@@ -427,8 +423,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: ${{ env.LLGO_SOURCE_REPOSITORY }}
-          ref: ${{ env.LLGO_SOURCE_REF }}
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
 
       - name: Set up Go for the report generator
         uses: ./.github/actions/setup-go
