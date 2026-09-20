@@ -779,7 +779,7 @@ jobs:
           {
             echo '## GOROOT run summary'
             echo
-            echo "Received $report_count/162 shard reports."
+            echo "Received $report_count/168 shard reports."
             echo
             echo '| Platform / toolchain | Shards | Selected | Observed | Passed | Failed | Skipped |'
             echo '|---|---:|---:|---:|---:|---:|---:|'
@@ -787,7 +787,7 @@ jobs:
               write_row "🍎 macOS · 🦾 ARM64 · Go $version" darwin/arm64 "$version" 8
               write_row "🐧 Linux · 🖥️ AMD64 · Go $version" linux/amd64 "$version" 8
               write_row "🪟 Windows · 🟦 MSVC · 🖥️ AMD64 · Go $version" windows-msvc/amd64 "$version" 8
-              write_row "🪟 Windows · 🟦 MSVC · 🦾 ARM64 · Go $version" windows-msvc/arm64 "$version" 9
+              write_row "🪟 Windows · 🟦 MSVC · 🦾 ARM64 · Go $version" windows-msvc/arm64 "$version" 12
               write_row "🪟 Windows · 🟦 MSVC · 💾 386 · Go $version" windows-msvc/386 "$version" 8
               write_row "🪟 Windows · 🦬 GNU · 🖥️ AMD64 · Go $version" windows-mingw/amd64 "$version" 8
               write_row "🪟 Windows · 🦬 GNU · 🦾 ARM64 · Go $version" windows-mingw/arm64 "$version" 8
@@ -849,8 +849,8 @@ jobs:
           GOROOT_RESULT: ${{ needs.goroot.result }}
           WASM_RESULT: ${{ needs.goroot-wasm.result }}
         run: |
-          if [[ "$GOROOT_REPORT_COUNT" -ne 162 ]]; then
-            echo "error: expected 162 shard reports, got $GOROOT_REPORT_COUNT" >&2
+          if [[ "$GOROOT_REPORT_COUNT" -ne 168 ]]; then
+            echo "error: expected 168 shard reports, got $GOROOT_REPORT_COUNT" >&2
             exit 1
           fi
           if [[ "$GOROOT_RESULT" != success || "$WASM_RESULT" != success ]]; then
