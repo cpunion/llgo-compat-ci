@@ -500,6 +500,15 @@ jobs:
           shard_index=${{ matrix.shard-index }}
           paired_shard_index=$(((shard_index + LLGO_GOROOT_SHARD_TOTAL / 2) % LLGO_GOROOT_SHARD_TOTAL))
           export LLGO_GOROOT_SHARD_INDEXES="$shard_index:$paired_shard_index"
+
+          # Go's Node wrapper reserves only 8 KiB for argv and env. Repository
+          # metadata is irrelevant to the test processes and can exceed that
+          # limit when every GITHUB_/ACTIONS_ variable is inherited.
+          for name in $(compgen -e); do
+            case "$name" in
+              GITHUB_*|ACTIONS_*) unset "$name" ;;
+            esac
+          done
           bash dev/test_goroot.sh "$GO126_GOROOT" "$GO127_GOROOT" -- \
             -directive-mode ci \
             -wasm-profile "${{ matrix.wasm_profile }}" \

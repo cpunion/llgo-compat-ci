@@ -276,6 +276,13 @@ jobs:
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ matrix.profile == 'W32-WASI' && 5 || 3 }}
         run: |
+          # Go's Node wrapper reserves only 8 KiB for argv and env. Keep
+          # Actions control-plane metadata out of spawned Wasm processes.
+          for name in $(compgen -e); do
+            case "$name" in
+              GITHUB_*|ACTIONS_*) unset "$name" ;;
+            esac
+          done
           go run ./dev/wasmstdlib -full -profile "$PROFILE" \
             -shard "$SHARD" -shards "$SHARDS" -llgo "$RUNNER_TEMP/llgo" \
             -report "$RUNNER_TEMP/acceptance.json"
@@ -387,6 +394,13 @@ jobs:
           set -o pipefail
           target_goroot="$(go env GOROOT)"
           status=0
+          # These values are not test inputs and needlessly consume GoJS's
+          # fixed 8 KiB argv-and-environment block.
+          for name in $(compgen -e); do
+            case "$name" in
+              GITHUB_*|ACTIONS_*) unset "$name" ;;
+            esac
+          done
           for profile in J32-GoJS J32-Emscripten J64-Emscripten W32-WASI; do
             echo "::group::Exercise representative runnable cases ($profile)"
             if ! (
