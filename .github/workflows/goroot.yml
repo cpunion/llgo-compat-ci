@@ -43,87 +43,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # GOROOT is the compiler's primary compatibility suite. Always cover
-        # the two most recent Go releases; LLGo and this runner are still built
-        # once per job with the current toolchain from .go-version.
-        os: [macos-latest, ubuntu-latest, windows-2022, windows-11-arm]
-        windows_abi: [msvc, mingw]
-        windows_arch: [amd64, arm64, "386"]
-        # Eight native shards keep paired Go 1.26/1.27 jobs near the per-job
-        # latency target without returning to a version-expanded job matrix.
-        shard-index: ["0", "1", "2", "3", "4", "5", "6", "7"]
-        shard-total: ["8"]
-        exclude:
-          - os: macos-latest
-            windows_abi: mingw
-          - os: ubuntu-latest
-            windows_abi: mingw
-          - os: macos-latest
-            windows_arch: arm64
-          - os: macos-latest
-            windows_arch: "386"
-          - os: ubuntu-latest
-            windows_arch: arm64
-          - os: ubuntu-latest
-            windows_arch: "386"
-          - os: windows-2022
-            windows_arch: arm64
-          - os: windows-11-arm
-            windows_arch: amd64
-          - os: windows-11-arm
-            windows_arch: "386"
-          # The paired MSVC/386 shard 1/8 outlived its hosted runner.
-          - os: windows-2022
-            windows_abi: msvc
-            windows_arch: "386"
-            shard-index: "1"
-            shard-total: "8"
-          # These Windows ARM shards have repeatedly lost their hosted runner.
-          # Split only the affected shards below.
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "0"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "1"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "5"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "6"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "0"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "4"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "6"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "7"
-            shard-total: "8"
+        # Temporary validation of the shards that failed in the full run.
         include:
-          # These entries exactly partition the excluded 1/8 shards and their
-          # paired Go-version shards. Only subshards that still reach the
-          # hosted-runner limit are split beyond 1/16.
           - os: windows-2022
             windows_abi: msvc
             windows_arch: "386"
@@ -136,18 +57,6 @@ jobs:
             shard-index: "9"
             shard-total: "16"
             paired-shard-index: "13"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "0"
-            shard-total: "16"
-            paired-shard-index: "4"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "8"
-            shard-total: "16"
-            paired-shard-index: "12"
           - os: windows-11-arm
             windows_abi: msvc
             windows_arch: arm64
@@ -160,104 +69,11 @@ jobs:
             shard-index: "33"
             shard-total: "64"
             paired-shard-index: "37"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "17"
-            shard-total: "64"
-            paired-shard-index: "21"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "49"
-            shard-total: "64"
-            paired-shard-index: "53"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "9"
-            shard-total: "16"
-            paired-shard-index: "13"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "5"
-            shard-total: "32"
-            paired-shard-index: "1"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "21"
-            shard-total: "32"
-            paired-shard-index: "17"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "13"
-            shard-total: "16"
-            paired-shard-index: "9"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "6"
-            shard-total: "16"
-            paired-shard-index: "2"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "14"
-            shard-total: "16"
-            paired-shard-index: "10"
-          # Preserve the paired Go 1.26/1.27 partition of MinGW ARM64 while
-          # halving the four shards that lost hosted runners on recent runs.
-          - os: windows-11-arm
+          - os: windows-2022
             windows_abi: mingw
-            windows_arch: arm64
+            windows_arch: "386"
             shard-index: "0"
-            shard-total: "16"
-            paired-shard-index: "4"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "8"
-            shard-total: "16"
-            paired-shard-index: "12"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "4"
-            shard-total: "16"
-            paired-shard-index: "0"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "12"
-            shard-total: "16"
-            paired-shard-index: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "6"
-            shard-total: "16"
-            paired-shard-index: "2"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "14"
-            shard-total: "16"
-            paired-shard-index: "10"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "7"
-            shard-total: "16"
-            paired-shard-index: "3"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "15"
-            shard-total: "16"
-            paired-shard-index: "11"
+            shard-total: "8"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -555,6 +371,9 @@ jobs:
 
   goroot-wasm:
     name: GOROOT (wasm, ${{ matrix.wasm_profile }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/16)
+    if: >-
+      ${{ github.event_name != 'pull_request' ||
+          github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923' }}
     timeout-minutes: 180
     runs-on: ubuntu-24.04
     env:
@@ -856,7 +675,10 @@ jobs:
 
   goroot-summary:
     name: GOROOT summary
-    if: always()
+    if: >-
+      ${{ always() &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923') }}
     needs: [goroot, goroot-wasm]
     runs-on: ubuntu-24.04
     permissions:
