@@ -1,6 +1,9 @@
 name: GOROOT
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/goroot.yml
   workflow_dispatch:
     inputs:
       llgo_repository:
@@ -40,128 +43,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # GOROOT is the compiler's primary compatibility suite. Always cover
-        # the two most recent Go releases; LLGo and this runner are still built
-        # once per job with the current toolchain from .go-version.
-        os: [macos-latest, ubuntu-latest, windows-2022, windows-11-arm]
-        windows_abi: [msvc, mingw]
-        windows_arch: [amd64, arm64, "386"]
-        # Eight native shards keep paired Go 1.26/1.27 jobs near the per-job
-        # latency target without returning to a version-expanded job matrix.
-        shard-index: ["0", "1", "2", "3", "4", "5", "6", "7"]
-        shard-total: ["8"]
-        exclude:
-          - os: macos-latest
-            windows_abi: mingw
-          - os: ubuntu-latest
-            windows_abi: mingw
-          - os: macos-latest
-            windows_arch: arm64
-          - os: macos-latest
-            windows_arch: "386"
-          - os: ubuntu-latest
-            windows_arch: arm64
-          - os: ubuntu-latest
-            windows_arch: "386"
-          - os: windows-2022
-            windows_arch: arm64
-          - os: windows-11-arm
-            windows_arch: amd64
-          - os: windows-11-arm
-            windows_arch: "386"
-          # These MSVC/ARM64 shards have outlived or lost their hosted runner.
-          # Split only the affected shards below instead of multiplying the
-          # whole Windows ARM matrix.
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "0"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "1"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "5"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "6"
-            shard-total: "8"
+        # Validate only the last runner-lost shard, split in half.
         include:
-          # These entries exactly partition the excluded 1/8 shards and their
-          # paired Go-version shards. Only subshards that still reach the
-          # hosted-runner limit are split beyond 1/16.
           - os: windows-11-arm
             windows_abi: msvc
             windows_arch: arm64
-            shard-index: "0"
-            shard-total: "16"
-            paired-shard-index: "4"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "8"
-            shard-total: "16"
-            paired-shard-index: "12"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "1"
-            shard-total: "32"
-            paired-shard-index: "5"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "17"
+            shard-index: "29"
             shard-total: "64"
-            paired-shard-index: "21"
+            paired-shard-index: "25"
           - os: windows-11-arm
             windows_abi: msvc
             windows_arch: arm64
-            shard-index: "49"
+            shard-index: "61"
             shard-total: "64"
-            paired-shard-index: "53"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "9"
-            shard-total: "16"
-            paired-shard-index: "13"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "5"
-            shard-total: "32"
-            paired-shard-index: "1"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "21"
-            shard-total: "32"
-            paired-shard-index: "17"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "13"
-            shard-total: "16"
-            paired-shard-index: "9"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "6"
-            shard-total: "16"
-            paired-shard-index: "2"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "14"
-            shard-total: "16"
-            paired-shard-index: "10"
+            paired-shard-index: "57"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -345,14 +240,26 @@ jobs:
             return "${pipeline_status[0]}"
           }
 
-          run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
-          pids=("$!")
-          run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
-          pids+=("$!")
           status=0
-          for pid in "${pids[@]}"; do
-            wait "$pid" || status=1
-          done
+          serial_versions=0
+          if [[ "$LLGO_GOROOT_SHARD_TOTAL" == "8" ]] && {
+            [[ "$RUNNER_OS" == "Linux" && "$shard_index" == "6" ]] ||
+            [[ "$RUNNER_OS" == "macOS" && "$shard_index" == "5" ]]
+          }; then
+            serial_versions=1
+          fi
+          if (( serial_versions )); then
+            run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" || status=1
+            run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" || status=1
+          else
+            run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
+            pids=("$!")
+            run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
+            pids+=("$!")
+            for pid in "${pids[@]}"; do
+              wait "$pid" || status=1
+            done
+          fi
           exit "$status"
 
       - name: Summarize GOROOT shard
@@ -447,6 +354,9 @@ jobs:
 
   goroot-wasm:
     name: GOROOT (wasm, ${{ matrix.wasm_profile }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/16)
+    if: >-
+      ${{ github.event_name != 'pull_request' ||
+          github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923' }}
     timeout-minutes: 180
     runs-on: ubuntu-24.04
     env:
@@ -615,6 +525,31 @@ jobs:
             set +e
             (
               cd test/goroot
+              max_rss_mib=4096
+              build_timeout=3m
+              if [[ "${{ matrix.wasm_profile }}" == "J32-GoJS" ]]; then
+                # Case-to-shard placement changes with the Go version and the
+                # active directive set. Detect rangegen.go from the actual
+                # selected case list instead of assuming a fixed shard.
+                case_list="$RUNNER_TEMP/goroot-cases-go${version}.txt"
+                if env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
+                  "$LLGO_GOROOT_RUNNER" \
+                  -test.run='^TestGoRootRunCases$' -test.count=1 \
+                  -goroot "$target_goroot" \
+                  -directive-mode ci \
+                  -wasm-profile "${{ matrix.wasm_profile }}" \
+                  -list-case-paths \
+                  -shard-index "$target_shard" \
+                  -shard-total "$LLGO_GOROOT_SHARD_TOTAL" \
+                  >"$case_list" 2>&1 && grep -Eq '(^|[[:space:]])rangegen\.go$' "$case_list"; then
+                  # rangegen.go's Emscripten compiler process peaks around
+                  # 7 GiB and needs more than the default per-case timeout.
+                  # Keep both allowances limited to the selected case.
+                  max_rss_mib=8192
+                  build_timeout=15m
+                fi
+                rm -f "$case_list"
+              fi
               env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
                 "$LLGO_GOROOT_RUNNER" \
                 -test.run='^TestGoRootRunCases$' -test.count=1 \
@@ -622,6 +557,8 @@ jobs:
                 -goroot "$target_goroot" \
                 -directive-mode ci \
                 -wasm-profile "${{ matrix.wasm_profile }}" \
+                -build-timeout "$build_timeout" \
+                -max-rss-mib "$max_rss_mib" \
                 -progress 60s \
                 -shard-index "$target_shard" \
                 -shard-total "$LLGO_GOROOT_SHARD_TOTAL"
@@ -721,7 +658,10 @@ jobs:
 
   goroot-summary:
     name: GOROOT summary
-    if: always()
+    if: >-
+      ${{ always() &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923') }}
     needs: [goroot, goroot-wasm]
     runs-on: ubuntu-24.04
     permissions:
@@ -798,7 +738,7 @@ jobs:
           {
             echo '## GOROOT run summary'
             echo
-            echo "Received $report_count/174 shard reports."
+            echo "Received $report_count/186 shard reports."
             echo
             echo '| Platform / toolchain | Shards | Selected | Observed | Passed | Failed | Skipped |'
             echo '|---|---:|---:|---:|---:|---:|---:|'
@@ -806,10 +746,10 @@ jobs:
               write_row "🍎 macOS · 🦾 ARM64 · Go $version" darwin/arm64 "$version" 8
               write_row "🐧 Linux · 🖥️ AMD64 · Go $version" linux/amd64 "$version" 8
               write_row "🪟 Windows · 🟦 MSVC · 🖥️ AMD64 · Go $version" windows-msvc/amd64 "$version" 8
-              write_row "🪟 Windows · 🟦 MSVC · 🦾 ARM64 · Go $version" windows-msvc/arm64 "$version" 15
-              write_row "🪟 Windows · 🟦 MSVC · 💾 386 · Go $version" windows-msvc/386 "$version" 8
+              write_row "🪟 Windows · 🟦 MSVC · 🦾 ARM64 · Go $version" windows-msvc/arm64 "$version" 16
+              write_row "🪟 Windows · 🟦 MSVC · 💾 386 · Go $version" windows-msvc/386 "$version" 9
               write_row "🪟 Windows · 🦬 GNU · 🖥️ AMD64 · Go $version" windows-mingw/amd64 "$version" 8
-              write_row "🪟 Windows · 🦬 GNU · 🦾 ARM64 · Go $version" windows-mingw/arm64 "$version" 8
+              write_row "🪟 Windows · 🦬 GNU · 🦾 ARM64 · Go $version" windows-mingw/arm64 "$version" 12
               write_row "🪟 Windows · 🦬 GNU · 💾 386 · Go $version" windows-mingw/386 "$version" 8
               write_row "🕸️ WebAssembly · 📜 JS · Go $version" js/wasm "$version" 16
             done
@@ -868,8 +808,8 @@ jobs:
           GOROOT_RESULT: ${{ needs.goroot.result }}
           WASM_RESULT: ${{ needs.goroot-wasm.result }}
         run: |
-          if [[ "$GOROOT_REPORT_COUNT" -ne 174 ]]; then
-            echo "error: expected 174 shard reports, got $GOROOT_REPORT_COUNT" >&2
+          if [[ "$GOROOT_REPORT_COUNT" -ne 186 ]]; then
+            echo "error: expected 186 shard reports, got $GOROOT_REPORT_COUNT" >&2
             exit 1
           fi
           if [[ "$GOROOT_RESULT" != success || "$WASM_RESULT" != success ]]; then
