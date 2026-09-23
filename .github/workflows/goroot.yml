@@ -564,8 +564,8 @@ jobs:
                 # compiler process peaks just above the native 4 GiB guard and
                 # needs more than the default per-case build timeout; keep
                 # both allowances limited to this wasm shard.
-                max_rss_mib=6144
-                build_timeout=10m
+                max_rss_mib=8192
+                build_timeout=15m
               fi
               env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
                 "$LLGO_GOROOT_RUNNER" \
