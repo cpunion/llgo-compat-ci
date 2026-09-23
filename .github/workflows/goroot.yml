@@ -418,17 +418,11 @@ jobs:
           }
 
           status=0
-          # Keep the two Go versions separate on Windows ARM64: concurrent
-          # runners can exceed the VM's resource budget even on small shards.
           serial_versions=0
-          if [[ "$RUNNER_OS" == "Windows" && "${{ matrix.windows_arch }}" == "arm64" ]]; then
-            serial_versions=1
-          elif [[ "$LLGO_GOROOT_SHARD_TOTAL" == "8" ]] && {
+          if [[ "$LLGO_GOROOT_SHARD_TOTAL" == "8" ]] && {
             [[ "$RUNNER_OS" == "Linux" && "$shard_index" == "6" ]] ||
             [[ "$RUNNER_OS" == "macOS" && "$shard_index" == "5" ]]
           }; then
-            # Both Go versions select rangegen.go in these shards. Its large
-            # generated builds should not compete for one runner's memory.
             serial_versions=1
           fi
           if (( serial_versions )); then
