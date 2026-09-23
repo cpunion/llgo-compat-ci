@@ -562,11 +562,14 @@ jobs:
             (
               cd test/goroot
               max_rss_mib=4096
+              build_timeout=3m
               if [[ "$shard_index" == "5" ]]; then
                 # rangegen.go is selected by this shard. Its Emscripten
-                # compiler process peaks just above the native 4 GiB guard;
-                # keep the larger allowance limited to this wasm shard.
+                # compiler process peaks just above the native 4 GiB guard and
+                # needs more than the default per-case build timeout; keep
+                # both allowances limited to this wasm shard.
                 max_rss_mib=5120
+                build_timeout=10m
               fi
               env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
                 "$LLGO_GOROOT_RUNNER" \
@@ -575,6 +578,7 @@ jobs:
                 -goroot "$target_goroot" \
                 -directive-mode ci \
                 -wasm-profile "${{ matrix.wasm_profile }}" \
+                -build-timeout "$build_timeout" \
                 -max-rss-mib "$max_rss_mib" \
                 -progress 60s \
                 -shard-index "$target_shard" \
