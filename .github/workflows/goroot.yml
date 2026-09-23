@@ -699,6 +699,13 @@ jobs:
             set +e
             (
               cd test/goroot
+              max_rss_mib=4096
+              if [[ "$shard_index" == "5" ]]; then
+                # rangegen.go is selected by this shard. Its Emscripten
+                # compiler process peaks just above the native 4 GiB guard;
+                # keep the larger allowance limited to this wasm shard.
+                max_rss_mib=5120
+              fi
               env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
                 "$LLGO_GOROOT_RUNNER" \
                 -test.run='^TestGoRootRunCases$' -test.count=1 \
@@ -706,6 +713,7 @@ jobs:
                 -goroot "$target_goroot" \
                 -directive-mode ci \
                 -wasm-profile "${{ matrix.wasm_profile }}" \
+                -max-rss-mib "$max_rss_mib" \
                 -progress 60s \
                 -shard-index "$target_shard" \
                 -shard-total "$LLGO_GOROOT_SHARD_TOTAL"
