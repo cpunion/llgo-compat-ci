@@ -1,6 +1,9 @@
 name: GOROOT
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/goroot.yml
   workflow_dispatch:
     inputs:
       llgo_repository:
