@@ -414,14 +414,24 @@ jobs:
             return "${pipeline_status[0]}"
           }
 
-          run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
-          pids=("$!")
-          run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
-          pids+=("$!")
           status=0
-          for pid in "${pids[@]}"; do
-            wait "$pid" || status=1
-          done
+          if [[ "$LLGO_GOROOT_SHARD_TOTAL" == "8" ]] && {
+            [[ "$RUNNER_OS" == "Linux" && "$shard_index" == "6" ]] ||
+            [[ "$RUNNER_OS" == "macOS" && "$shard_index" == "5" ]]
+          }; then
+            # Both Go versions select rangegen.go in these shards. Its large
+            # generated builds should not compete for one runner's memory.
+            run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" || status=1
+            run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" || status=1
+          else
+            run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
+            pids=("$!")
+            run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
+            pids+=("$!")
+            for pid in "${pids[@]}"; do
+              wait "$pid" || status=1
+            done
+          fi
           exit "$status"
 
       - name: Summarize GOROOT shard
