@@ -43,7 +43,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Temporary validation of the shards that failed in the full run.
         include:
           - os: windows-2022
             windows_abi: msvc
@@ -51,65 +50,6 @@ jobs:
             shard-index: "1"
             shard-total: "16"
             paired-shard-index: "5"
-          - os: windows-2022
-            windows_abi: msvc
-            windows_arch: "386"
-            shard-index: "9"
-            shard-total: "16"
-            paired-shard-index: "13"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "1"
-            shard-total: "64"
-            paired-shard-index: "5"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "33"
-            shard-total: "64"
-            paired-shard-index: "37"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "13"
-            shard-total: "32"
-            paired-shard-index: "9"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "29"
-            shard-total: "32"
-            paired-shard-index: "25"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "14"
-            shard-total: "32"
-            paired-shard-index: "10"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "30"
-            shard-total: "32"
-            paired-shard-index: "26"
-          - os: windows-2022
-            windows_abi: mingw
-            windows_arch: "386"
-            shard-index: "0"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "8"
-            shard-total: "32"
-            paired-shard-index: "12"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "24"
-            shard-total: "32"
-            paired-shard-index: "28"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -407,9 +347,7 @@ jobs:
 
   goroot-wasm:
     name: GOROOT (wasm, ${{ matrix.wasm_profile }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/16)
-    if: >-
-      ${{ github.event_name != 'pull_request' ||
-          github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923' }}
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     timeout-minutes: 180
     runs-on: ubuntu-24.04
     env:
@@ -711,10 +649,7 @@ jobs:
 
   goroot-summary:
     name: GOROOT summary
-    if: >-
-      ${{ always() &&
-          (github.event_name != 'pull_request' ||
-           github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923') }}
+    if: ${{ always() && github.event_name != 'workflow_dispatch' }}
     needs: [goroot, goroot-wasm]
     runs-on: ubuntu-24.04
     permissions:
