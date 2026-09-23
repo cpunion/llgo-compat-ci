@@ -701,13 +701,28 @@ jobs:
               cd test/goroot
               max_rss_mib=4096
               build_timeout=3m
-              if [[ "$shard_index" == "5" ]]; then
-                # rangegen.go is selected by this shard. Its Emscripten
-                # compiler process peaks around 7 GiB and needs more than the
-                # default per-case build timeout; keep both allowances limited
-                # to this wasm shard.
-                max_rss_mib=8192
-                build_timeout=15m
+              if [[ "${{ matrix.wasm_profile }}" == "J32-GoJS" ]]; then
+                # Case-to-shard placement changes with the Go version and the
+                # active directive set. Detect rangegen.go from the actual
+                # selected case list instead of assuming a fixed shard.
+                case_list="$RUNNER_TEMP/goroot-cases-go${version}.txt"
+                if env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
+                  "$LLGO_GOROOT_RUNNER" \
+                  -test.run='^TestGoRootRunCases$' -test.count=1 \
+                  -goroot "$target_goroot" \
+                  -directive-mode ci \
+                  -wasm-profile "${{ matrix.wasm_profile }}" \
+                  -list-case-paths \
+                  -shard-index "$target_shard" \
+                  -shard-total "$LLGO_GOROOT_SHARD_TOTAL" \
+                  >"$case_list" 2>&1 && grep -Eq '(^|[[:space:]])rangegen\.go$' "$case_list"; then
+                  # rangegen.go's Emscripten compiler process peaks around
+                  # 7 GiB and needs more than the default per-case timeout.
+                  # Keep both allowances limited to the selected case.
+                  max_rss_mib=8192
+                  build_timeout=15m
+                fi
+                rm -f "$case_list"
               fi
               env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
                 "$LLGO_GOROOT_RUNNER" \
