@@ -226,6 +226,7 @@ jobs:
                 -test.timeout="$LLGO_GOROOT_TEST_TIMEOUT" -test.v \
                 -goroot "$target_goroot" \
                 -directive-mode ci \
+                -xfail /dev/null \
                 -case '^fixedbugs/bug356\.go$' \
                 -min-swap-free-mib "$min_swap_free_mib" \
                 -progress 60s \
