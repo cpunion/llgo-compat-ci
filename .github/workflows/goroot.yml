@@ -226,6 +226,7 @@ jobs:
                 -test.timeout="$LLGO_GOROOT_TEST_TIMEOUT" -test.v \
                 -goroot "$target_goroot" \
                 -directive-mode ci \
+                -keepwork \
                 -xfail /dev/null \
                 -case '^(inline_literal\.go|fixedbugs/issue58300\.go)$' \
                 -min-swap-free-mib "$min_swap_free_mib" \
@@ -247,6 +248,16 @@ jobs:
             wait "$pid" || status=1
           done
           exit "$status"
+
+      - name: Inspect Windows function symbols
+        if: ${{ always() && runner.os == 'Windows' }}
+        shell: bash
+        run: |
+          temp_dir="$(cygpath -u "$TEMP")"
+          while IFS= read -r -d '' binary; do
+            echo "LLGo binary: $binary"
+            llvm-nm -an "$binary" | rg 'main[.$](f|g|foo|bar)' | head -40 || true
+          done < <(find "$temp_dir" -maxdepth 2 -type f -name llgo.out.exe -print0)
 
       - name: Summarize GOROOT shard
         if: always()
