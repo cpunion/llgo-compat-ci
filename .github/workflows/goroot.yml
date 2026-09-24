@@ -43,13 +43,13 @@ jobs:
         include:
           - os: windows-2022
             windows_abi: msvc
-            windows_arch: "386"
+            windows_arch: amd64
             shard-index: "0"
             shard-total: "1"
             paired-shard-index: "0"
           - os: windows-2022
             windows_abi: mingw
-            windows_arch: "386"
+            windows_arch: amd64
             shard-index: "0"
             shard-total: "1"
             paired-shard-index: "0"
@@ -227,7 +227,7 @@ jobs:
                 -goroot "$target_goroot" \
                 -directive-mode ci \
                 -xfail /dev/null \
-                -case '^fixedbugs/bug356\.go$' \
+                -case '^(inline_literal\.go|fixedbugs/issue58300\.go)$' \
                 -min-swap-free-mib "$min_swap_free_mib" \
                 -progress 60s \
                 -shard-index "$target_shard" \
