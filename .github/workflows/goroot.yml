@@ -615,7 +615,6 @@ jobs:
   goroot-summary:
     if: false # Native-only convert5 diagnostic.
     name: GOROOT summary
-    if: always()
     needs: [goroot, goroot-wasm]
     runs-on: ubuntu-24.04
     permissions:
