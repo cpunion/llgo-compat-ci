@@ -43,13 +43,13 @@ jobs:
         include:
           - os: windows-2022
             windows_abi: msvc
-            windows_arch: amd64
+            windows_arch: "386"
             shard-index: "0"
             shard-total: "1"
             paired-shard-index: "0"
           - os: windows-2022
             windows_abi: mingw
-            windows_arch: amd64
+            windows_arch: "386"
             shard-index: "0"
             shard-total: "1"
             paired-shard-index: "0"
@@ -226,7 +226,7 @@ jobs:
                 -test.timeout="$LLGO_GOROOT_TEST_TIMEOUT" -test.v \
                 -goroot "$target_goroot" \
                 -directive-mode ci \
-                -case '^convert5\.go$' \
+                -case '^fixedbugs/bug356\.go$' \
                 -min-swap-free-mib "$min_swap_free_mib" \
                 -progress 60s \
                 -shard-index "$target_shard" \
