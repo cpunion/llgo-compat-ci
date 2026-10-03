@@ -295,6 +295,16 @@ jobs:
         with:
           version: '39.0.1'
       - uses: ./.github/actions/setup-go
+      - name: Restore WAMR cache
+        if: ${{ matrix.profile == 'W32-WASI' }}
+        uses: ./.github/actions/setup-llgo-cache
+        with:
+          build-cache-mode: 'off'
+          crosscompile-cache-mode: 'off'
+          wamr-cache-mode: readwrite
+      - name: Install WAMR for W32
+        if: ${{ matrix.profile == 'W32-WASI' }}
+        run: bash dev/build_iwasm.sh
       - name: Check acceptance accounting
         run: go test ./dev/wasmstdlib -count=1
       - name: Build LLGo
@@ -414,6 +424,14 @@ jobs:
         with:
           version: '39.0.1'
       - uses: ./.github/actions/setup-go
+      - name: Restore WAMR cache
+        uses: ./.github/actions/setup-llgo-cache
+        with:
+          build-cache-mode: 'off'
+          crosscompile-cache-mode: 'off'
+          wamr-cache-mode: readwrite
+      - name: Install WAMR for W32
+        run: bash dev/build_iwasm.sh
       - name: Build LLGo and host-side GOROOT runner
         run: |
           go build -o "$RUNNER_TEMP/llgo" ./cmd/llgo
