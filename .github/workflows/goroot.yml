@@ -16,6 +16,12 @@ on:
         required: true
         default: main
         type: string
+      test_scope:
+        description: Suites to qualify
+        required: true
+        default: all
+        type: choice
+        options: [all, wasm]
   schedule:
     # 01:00 Asia/Shanghai (17:00 UTC on the previous day), daily.
     - cron: "0 17 * * *"
@@ -31,6 +37,7 @@ concurrency:
 
 jobs:
   goroot:
+    if: ${{ inputs.test_scope != 'wasm' }}
     name: GOROOT (${{ matrix.os }}${{ startsWith(matrix.os, 'windows') && format(', {0}, {1}', matrix.windows_abi, matrix.windows_arch) || '' }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/${{ matrix.shard-total }})
     timeout-minutes: 180
     outputs:
@@ -588,14 +595,11 @@ jobs:
             return "${pipeline_status[0]}"
           }
 
-          run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
-          pids=("$!")
-          run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
-          pids+=("$!")
+          # Asyncify dominates large runoutput builds. Do not let two
+          # compiler/linker pools compete for this runner's CPU and memory.
           status=0
-          for pid in "${pids[@]}"; do
-            wait "$pid" || status=1
-          done
+          run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" || status=1
+          run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" || status=1
           exit "$status"
 
       - name: Summarize GOROOT shard
@@ -712,9 +716,16 @@ jobs:
           WASM_RESULT: ${{ needs.goroot-wasm.result }}
           NATIVE_EXPECTED_REPORTS: ${{ needs.goroot.outputs.expected-reports }}
           WASM_EXPECTED_REPORTS: ${{ needs.goroot-wasm.outputs.expected-reports }}
+          TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
         run: |
           source dev/go_toolchain.sh
-          if [[ ! "$NATIVE_EXPECTED_REPORTS" =~ ^[1-9][0-9]*$ || ! "$WASM_EXPECTED_REPORTS" =~ ^[1-9][0-9]*$ ]]; then
+          if [[ "$TEST_SCOPE" == wasm && "$GOROOT_RESULT" == skipped ]]; then
+            NATIVE_EXPECTED_REPORTS=0
+          elif [[ ! "$NATIVE_EXPECTED_REPORTS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "error: missing expected native report count" >&2
+            exit 1
+          fi
+          if [[ ! "$WASM_EXPECTED_REPORTS" =~ ^[1-9][0-9]*$ ]]; then
             echo "error: missing expected report counts from the GOROOT matrices" >&2
             exit 1
           fi
@@ -765,6 +776,7 @@ jobs:
             echo '## GOROOT run summary'
             echo
             echo "Received $report_count/$expected_reports shard reports (two Go versions per configured matrix job)."
+            echo "Qualification scope: $TEST_SCOPE."
             echo
             echo '| Platform / toolchain | Shards | Selected | Observed | Passed | Failed | Skipped |'
             echo '|---|---:|---:|---:|---:|---:|---:|'
@@ -847,12 +859,15 @@ jobs:
         env:
           GOROOT_RESULT: ${{ needs.goroot.result }}
           WASM_RESULT: ${{ needs.goroot-wasm.result }}
+          TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
         run: |
           if [[ "$GOROOT_REPORT_COUNT" -ne "$GOROOT_EXPECTED_REPORT_COUNT" ]]; then
             echo "error: expected $GOROOT_EXPECTED_REPORT_COUNT shard reports, got $GOROOT_REPORT_COUNT" >&2
             exit 1
           fi
-          if [[ "$GOROOT_RESULT" != success || "$WASM_RESULT" != success ]]; then
+          native_expected=success
+          if [[ "$TEST_SCOPE" == wasm ]]; then native_expected=skipped; fi
+          if [[ "$GOROOT_RESULT" != "$native_expected" || "$WASM_RESULT" != success ]]; then
             echo "error: one or more GOROOT shards did not succeed" >&2
             exit 1
           fi

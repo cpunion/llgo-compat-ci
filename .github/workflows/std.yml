@@ -13,6 +13,12 @@ on:
         required: true
         default: main
         type: string
+      wasm_workers:
+        description: Go scheduler workers for Emscripten std profiles
+        required: true
+        default: '1'
+        type: choice
+        options: ['1', '2', '4']
   schedule:
     # 04:00 Asia/Shanghai (20:00 UTC on the previous day), daily.
     - cron: "0 20 * * *"
@@ -20,7 +26,7 @@ on:
 concurrency:
   # Periodic compatibility runs are reports, so a later invocation must not
   # cancel one that has already consumed hosted-runner time.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ inputs.wasm_workers || '1' }}
   cancel-in-progress: false
 
 permissions:
@@ -258,7 +264,7 @@ jobs:
           retention-days: 1
 
   wasm-std:
-    name: wasm std acceptance (${{ matrix.profile }}, ${{ matrix.shard }}/${{ matrix.profile == 'W32-WASI' && 5 || 3 }})
+    name: wasm std acceptance (${{ matrix.profile }}, workers ${{ (matrix.profile == 'J32-Emscripten' || matrix.profile == 'J64-Emscripten') && inputs.wasm_workers || '1' }}, ${{ matrix.shard }}/${{ matrix.profile == 'W32-WASI' && 5 || 3 }})
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
@@ -273,6 +279,7 @@ jobs:
             shard: 4
     env:
       GOFLAGS: -tags=llvm22
+      LLGO_WASM_WORKERS: ${{ (matrix.profile == 'J32-Emscripten' || matrix.profile == 'J64-Emscripten') && inputs.wasm_workers || '1' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -364,7 +371,7 @@ jobs:
           if-no-files-found: error
 
   wasm-browser:
-    name: real-browser GoJS callback
+    name: real-browser GoJS callback and worker acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -381,6 +388,16 @@ jobs:
       - uses: emscripten-core/setup-emsdk@v15
         with:
           version: '6.0.8'
+      - uses: actions/setup-node@v7
+        if: inputs.wasm_workers != '' && inputs.wasm_workers != '1'
+        with:
+          node-version: '24'
+      - uses: ./.github/actions/setup-binaryen
+        if: inputs.wasm_workers != '' && inputs.wasm_workers != '1'
+      - uses: bytecodealliance/actions/wasm-tools/setup@v1
+        if: inputs.wasm_workers != '' && inputs.wasm_workers != '1'
+        with:
+          version: '1.243.0'
       - uses: ./.github/actions/setup-go
       - name: Set up Chrome
         id: setup-chrome
@@ -400,6 +417,12 @@ jobs:
           BROWSER_BIN: ${{ steps.setup-chrome.outputs.chrome-path }}
           LLGO: ${{ runner.temp }}/llgo
         run: dev/test_wasm_browser.sh
+      - name: Run Emscripten worker acceptance in Node and Chrome
+        if: inputs.wasm_workers != '' && inputs.wasm_workers != '1'
+        env:
+          CHROME: ${{ steps.setup-chrome.outputs.chrome-path }}
+          LLGO: ${{ runner.temp }}/llgo
+        run: dev/test_wasm_workers.sh
 
   wasm-sentinels:
     name: wasm GOROOT sentinels
@@ -569,6 +592,8 @@ jobs:
             } >"$report_md"
           fi
 
+          printf '\nEmscripten std scheduler workers: %s. W32 uses its pthread backend; J32-GoJS, the DOM callback, and GOROOT sentinel suites use the single-worker JS scheduler.\n' \
+            '${{ inputs.wasm_workers || '1' }}' >>"$report_md"
           cat "$report_md" >>"$GITHUB_STEP_SUMMARY"
           echo "STD_REPORT=$report_md" >>"$GITHUB_ENV"
 
