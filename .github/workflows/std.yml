@@ -304,7 +304,9 @@ jobs:
           wasmer-cache-mode: readwrite
       - name: Install Wasmer for W32
         if: ${{ matrix.profile == 'W32-WASI' }}
-        run: bash dev/install_wasmer.sh
+        run: |
+          bash dev/install_wasmer.sh
+          wasmer --version -v
       - name: Check acceptance accounting
         run: go test ./dev/wasmstdlib -count=1
       - name: Build LLGo
@@ -431,7 +433,9 @@ jobs:
           crosscompile-cache-mode: 'off'
           wasmer-cache-mode: readwrite
       - name: Install Wasmer for W32
-        run: bash dev/install_wasmer.sh
+        run: |
+          bash dev/install_wasmer.sh
+          wasmer --version -v
       - name: Build LLGo and host-side GOROOT runner
         run: |
           go build -o "$RUNNER_TEMP/llgo" ./cmd/llgo
