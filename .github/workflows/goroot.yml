@@ -33,6 +33,8 @@ jobs:
   goroot:
     name: GOROOT (${{ matrix.os }}${{ startsWith(matrix.os, 'windows') && format(', {0}, {1}', matrix.windows_abi, matrix.windows_arch) || '' }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/${{ matrix.shard-total }})
     timeout-minutes: 180
+    outputs:
+      expected-reports: ${{ steps.report-count.outputs.count }}
     env:
       GOPROXY: https://proxy.golang.org,direct
       LLGO_GOROOT_HEARTBEAT_SECONDS: "60"
@@ -59,6 +61,15 @@ jobs:
             paired-shard-index: "57"
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Record expected matrix reports
+        id: report-count
+        shell: bash
+        env:
+          MATRIX_JOB_TOTAL: ${{ strategy.job-total }}
+        # Each configured job reports Go 1.26 and Go 1.27, even when it runs
+        # selected subshards of a larger corpus partition.
+        run: echo "count=$((MATRIX_JOB_TOTAL * 2))" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
@@ -359,6 +370,8 @@ jobs:
           github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923' }}
     timeout-minutes: 180
     runs-on: ubuntu-24.04
+    outputs:
+      expected-reports: ${{ steps.report-count.outputs.count }}
     env:
       GOPROXY: https://proxy.golang.org,direct
       LLGO_GOROOT_HEARTBEAT_SECONDS: "60"
@@ -377,6 +390,13 @@ jobs:
         # without consuming additional macOS or Windows runners.
         shard-index: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"]
     steps:
+      - name: Record expected matrix reports
+        id: report-count
+        shell: bash
+        env:
+          MATRIX_JOB_TOTAL: ${{ strategy.job-total }}
+        run: echo "count=$((MATRIX_JOB_TOTAL * 2))" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
@@ -390,7 +410,7 @@ jobs:
       - name: Set up Emscripten
         uses: emscripten-core/setup-emsdk@v15
         with:
-          version: '4.0.21'
+          version: '6.0.8'
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -690,8 +710,15 @@ jobs:
         env:
           GOROOT_RESULT: ${{ needs.goroot.result }}
           WASM_RESULT: ${{ needs.goroot-wasm.result }}
+          NATIVE_EXPECTED_REPORTS: ${{ needs.goroot.outputs.expected-reports }}
+          WASM_EXPECTED_REPORTS: ${{ needs.goroot-wasm.outputs.expected-reports }}
         run: |
           source dev/go_toolchain.sh
+          if [[ ! "$NATIVE_EXPECTED_REPORTS" =~ ^[1-9][0-9]*$ || ! "$WASM_EXPECTED_REPORTS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "error: missing expected report counts from the GOROOT matrices" >&2
+            exit 1
+          fi
+          expected_reports=$((NATIVE_EXPECTED_REPORTS + WASM_EXPECTED_REPORTS))
           summary_tsv="$RUNNER_TEMP/goroot-summary.tsv"
           cases_tsv="$RUNNER_TEMP/goroot-cases.tsv"
           report_md="$RUNNER_TEMP/goroot-report.md"
@@ -703,18 +730,17 @@ jobs:
           fi
 
           report_count=$(wc -l <"$summary_tsv" | tr -d ' ')
+          report_platforms=$(cut -f1 "$summary_tsv" | sort -u | paste -sd, -)
           go126="$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)"
           go127="$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)"
           write_row() {
             local label=$1
             local platform=$2
             local version=$3
-            local expected_shards=$4
             awk -F '\t' \
               -v label="$label" \
               -v platform="$platform" \
-              -v version="$version" \
-              -v expected="$expected_shards" '
+              -v version="$version" '
                 $1 == platform && $2 == version {
                   shards++
                   if ($4 ~ /^[0-9]+$/) {
@@ -729,8 +755,8 @@ jobs:
                 }
                 END {
                   selected_text = selected_unknown ? "?" : selected
-                  printf "| %s | %d/%d | %s | %d | %d | %d | %d |\n", \
-                    label, shards, expected, selected_text, observed, passed, failed, skipped
+                  printf "| %s | %d | %s | %d | %d | %d | %d |\n", \
+                    label, shards, selected_text, observed, passed, failed, skipped
                 }
               ' "$summary_tsv"
           }
@@ -738,20 +764,15 @@ jobs:
           {
             echo '## GOROOT run summary'
             echo
-            echo "Received $report_count/186 shard reports."
+            echo "Received $report_count/$expected_reports shard reports (two Go versions per configured matrix job)."
             echo
             echo '| Platform / toolchain | Shards | Selected | Observed | Passed | Failed | Skipped |'
             echo '|---|---:|---:|---:|---:|---:|---:|'
+            IFS=, read -r -a platforms <<<"$report_platforms"
             for version in "$go126" "$go127"; do
-              write_row "🍎 macOS · 🦾 ARM64 · Go $version" darwin/arm64 "$version" 8
-              write_row "🐧 Linux · 🖥️ AMD64 · Go $version" linux/amd64 "$version" 8
-              write_row "🪟 Windows · 🟦 MSVC · 🖥️ AMD64 · Go $version" windows-msvc/amd64 "$version" 8
-              write_row "🪟 Windows · 🟦 MSVC · 🦾 ARM64 · Go $version" windows-msvc/arm64 "$version" 16
-              write_row "🪟 Windows · 🟦 MSVC · 💾 386 · Go $version" windows-msvc/386 "$version" 9
-              write_row "🪟 Windows · 🦬 GNU · 🖥️ AMD64 · Go $version" windows-mingw/amd64 "$version" 8
-              write_row "🪟 Windows · 🦬 GNU · 🦾 ARM64 · Go $version" windows-mingw/arm64 "$version" 12
-              write_row "🪟 Windows · 🦬 GNU · 💾 386 · Go $version" windows-mingw/386 "$version" 8
-              write_row "🕸️ WebAssembly · 📜 JS · Go $version" js/wasm "$version" 16
+              for platform in "${platforms[@]}"; do
+                write_row "$platform · Go $version" "$platform" "$version"
+              done
             done
             echo
             echo '_Passed means the runner classification succeeded; expected failures, not-applicable skips, host skips, and classified flakes do not count as Failed._'
@@ -760,7 +781,7 @@ jobs:
 
           report_args=(
             -input "$cases_tsv"
-            -platforms "darwin/arm64,linux/amd64,windows-msvc/amd64,windows-msvc/arm64,windows-msvc/386,windows-mingw/amd64,windows-mingw/arm64,windows-mingw/386,js/wasm"
+            -platforms "$report_platforms"
             -versions "$go126,$go127"
             -run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           )
@@ -769,8 +790,11 @@ jobs:
           fi
           go run ./test/goroot/report "${report_args[@]}" >>"$report_md"
           cat "$report_md" >>"$GITHUB_STEP_SUMMARY"
-          echo "GOROOT_REPORT=$report_md" >>"$GITHUB_ENV"
-          echo "GOROOT_REPORT_COUNT=$report_count" >>"$GITHUB_ENV"
+          {
+            echo "GOROOT_REPORT=$report_md"
+            echo "GOROOT_REPORT_COUNT=$report_count"
+            echo "GOROOT_EXPECTED_REPORT_COUNT=$expected_reports"
+          } >>"$GITHUB_ENV"
 
       - name: Preserve GOROOT summary report
         if: always()
@@ -797,10 +821,26 @@ jobs:
             while IFS= read -r issue_number; do
               gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY"
             done
+          # Keep the full report in the artifact and job summary. Large failure
+          # tables can exceed GitHub's issue-body limit during a regression.
+          issue_body="$RUNNER_TEMP/goroot-issue.md"
+          python3 - "$GOROOT_REPORT" "$issue_body" <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          text = pathlib.Path(sys.argv[1]).read_text()
+          if len(text.encode("utf-8")) > 60000:
+              text = text.encode("utf-8")[:60000].decode("utf-8", errors="ignore")
+              text = text.rsplit("\n", 1)[0]
+              run_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              text += f"\n\nFailure details truncated for the issue-body limit. [Full report and artifacts]({run_url}).\n"
+          pathlib.Path(sys.argv[2]).write_text(text)
+          PY
           gh issue create \
             --repo "$GITHUB_REPOSITORY" \
             --title "$title" \
-            --body-file "$GOROOT_REPORT"
+            --body-file "$issue_body"
 
       - name: Verify GOROOT matrix result
         if: always()
@@ -808,8 +848,8 @@ jobs:
           GOROOT_RESULT: ${{ needs.goroot.result }}
           WASM_RESULT: ${{ needs.goroot-wasm.result }}
         run: |
-          if [[ "$GOROOT_REPORT_COUNT" -ne 186 ]]; then
-            echo "error: expected 186 shard reports, got $GOROOT_REPORT_COUNT" >&2
+          if [[ "$GOROOT_REPORT_COUNT" -ne "$GOROOT_EXPECTED_REPORT_COUNT" ]]; then
+            echo "error: expected $GOROOT_EXPECTED_REPORT_COUNT shard reports, got $GOROOT_REPORT_COUNT" >&2
             exit 1
           fi
           if [[ "$GOROOT_RESULT" != success || "$WASM_RESULT" != success ]]; then

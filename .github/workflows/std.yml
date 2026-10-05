@@ -284,7 +284,7 @@ jobs:
       - uses: emscripten-core/setup-emsdk@v15
         if: ${{ matrix.profile == 'J32-GoJS' || matrix.profile == 'J32-Emscripten' || matrix.profile == 'J64-Emscripten' }}
         with:
-          version: '4.0.21'
+          version: '6.0.8'
       - uses: actions/setup-node@v7
         if: ${{ matrix.profile != 'W32-WASI' }}
         with:
@@ -295,16 +295,19 @@ jobs:
         with:
           version: '39.0.1'
       - uses: ./.github/actions/setup-go
-      - name: Restore WAMR cache
+      - name: Restore Wasmer cache
         if: ${{ matrix.profile == 'W32-WASI' }}
         uses: ./.github/actions/setup-llgo-cache
         with:
           build-cache-mode: 'off'
           crosscompile-cache-mode: 'off'
-          wamr-cache-mode: readwrite
-      - name: Install WAMR for W32
+          wasmer-cache-mode: readwrite
+      - name: Install Wasmer for W32
         if: ${{ matrix.profile == 'W32-WASI' }}
-        run: bash dev/build_iwasm.sh
+        run: bash dev/install_wasmer.sh
+      - name: Record Wasmer revision and backends
+        if: ${{ matrix.profile == 'W32-WASI' }}
+        run: wasmer --version -v
       - name: Check acceptance accounting
         run: go test ./dev/wasmstdlib -count=1
       - name: Build LLGo
@@ -377,7 +380,7 @@ jobs:
           llvm-version: 22
       - uses: emscripten-core/setup-emsdk@v15
         with:
-          version: '4.0.21'
+          version: '6.0.8'
       - uses: ./.github/actions/setup-go
       - name: Set up Chrome
         id: setup-chrome
@@ -415,7 +418,7 @@ jobs:
           llvm-version: 22
       - uses: emscripten-core/setup-emsdk@v15
         with:
-          version: '4.0.21'
+          version: '6.0.8'
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -424,14 +427,16 @@ jobs:
         with:
           version: '39.0.1'
       - uses: ./.github/actions/setup-go
-      - name: Restore WAMR cache
+      - name: Restore Wasmer cache
         uses: ./.github/actions/setup-llgo-cache
         with:
           build-cache-mode: 'off'
           crosscompile-cache-mode: 'off'
-          wamr-cache-mode: readwrite
-      - name: Install WAMR for W32
-        run: bash dev/build_iwasm.sh
+          wasmer-cache-mode: readwrite
+      - name: Install Wasmer for W32
+        run: bash dev/install_wasmer.sh
+      - name: Record Wasmer revision and backends
+        run: wasmer --version -v
       - name: Build LLGo and host-side GOROOT runner
         run: |
           go build -o "$RUNNER_TEMP/llgo" ./cmd/llgo
