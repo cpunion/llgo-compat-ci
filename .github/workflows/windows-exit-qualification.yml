@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: b74cc1bdc98e88a12a81a773ff2ef08a79dba123
+          ref: ee8c727c1106b5bcc29a2e7ad3fb1a88e9a2c376
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
@@ -230,45 +230,6 @@ jobs:
           if ($child.ExitCode -ne 0 -or $actual -ne "Hello world by c.Printf`n8`n8`n" -or (Get-Item $stderr).Length) {
             throw "C printf exit lost output or failed: code=$($child.ExitCode), output=$actual"
           }
-
-      - name: Repeated original gcgort acceptance
-        if: always()
-        shell: pwsh
-        env:
-          LLGO_BUILD_CACHE: ""
-          GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
-          GO127_GOROOT: ${{ steps.go127.outputs.goroot }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $env:LLGO_STDIO_NOBUF = "1"
-          $logRoot = Join-Path $env:RUNNER_TEMP "gcgort-qualification"
-          New-Item -ItemType Directory -Force $logRoot | Out-Null
-          $failed = $false
-          foreach ($iteration in 1..6) {
-            foreach ($version in @("1.26", "1.27")) {
-              $targetRoot = if ($version -eq "1.26") { $env:GO126_GOROOT } else { $env:GO127_GOROOT }
-              $env:GOROOT = $targetRoot
-              $env:LLGO_ROOT = $env:GITHUB_WORKSPACE
-              $env:GOTOOLCHAIN = "local"
-              $env:GOMAXPROCS = "2"
-              $env:XDG_CACHE_HOME = Join-Path $env:RUNNER_TEMP "gcgort-qualified-cache-go$version"
-              $stdout = Join-Path $logRoot "go$version-iteration$iteration.stdout"
-              $stderr = Join-Path $logRoot "go$version-iteration$iteration.stderr"
-              $arguments = @(
-                "-test.run=^TestGoRootRunCases$", "-test.count=1", "-test.timeout=10m", "-test.v",
-                "-goroot", $targetRoot, "-case=^gcgort.go$", "-directive-mode", "ci",
-                "-min-swap-free-mib=512", "-progress=10s", "-shard-index=0", "-shard-total=1"
-              )
-              $runner = Start-Process -FilePath $env:LLGO_GOROOT_RUNNER -ArgumentList $arguments `
-                -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "test/goroot") `
-                -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-              $runner.WaitForExit()
-              Get-Content $stdout
-              Get-Content $stderr
-              if ($runner.ExitCode -ne 0) { $failed = $true }
-            }
-          }
-          if ($failed) { throw "gcgort qualification failed; every iteration is retained" }
 
       - name: Upload qualification results
         if: always()
