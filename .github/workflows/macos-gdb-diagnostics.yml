@@ -87,8 +87,42 @@ jobs:
           go build -o "$RUNNER_TEMP/llgo-bin/llgo" ./cmd/llgo
           echo "$RUNNER_TEMP/llgo-bin" >> "$GITHUB_PATH"
           echo "LLGO_ROOT=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          echo "LLGO_RAW_GDB=$LLGO_GDB" >> "$GITHUB_ENV"
+          echo "LLGO_DEBUGSERVER=$(xcrun --find debugserver)" >> "$GITHUB_ENV"
           wrapper="$RUNNER_TEMP/llgo-gdb-native"
-          printf '#!/bin/bash\nexec sudo -n %q "$@"\n' "$LLGO_GDB" > "$wrapper"
+          cat > "$wrapper" <<'PY'
+          #!/usr/bin/env python3
+          import os, pathlib, socket, subprocess, sys, time
+          args = sys.argv[1:]
+          if "run" not in args:
+              os.execv(os.environ["LLGO_RAW_GDB"], [os.environ["LLGO_RAW_GDB"], *args])
+          executable = args[args.index("--batch") + 1]
+          with socket.socket() as reserved:
+              reserved.bind(("127.0.0.1", 0))
+              port = reserved.getsockname()[1]
+          log_path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "gdb-diagnostics" / ("debugserver-" + str(os.getpid()) + ".log")
+          with log_path.open("w") as log:
+              server = subprocess.Popen([os.environ["LLGO_DEBUGSERVER"], "127.0.0.1:" + str(port), "--", executable], stdout=log, stderr=subprocess.STDOUT)
+              try:
+                  for i in range(100):
+                      if server.poll() is not None:
+                          raise RuntimeError("debugserver exited: " + log_path.read_text())
+                      output = subprocess.run(["/usr/sbin/lsof", "-nP", "-a", "-p", str(server.pid), "-iTCP:" + str(port), "-sTCP:LISTEN"], capture_output=True, text=True)
+                      if output.returncode == 0:
+                          break
+                      time.sleep(.1)
+                  else:
+                      raise RuntimeError("debugserver did not listen: " + log_path.read_text())
+                  args = ["continue" if arg == "run" else arg for arg in args]
+                  index = args.index(executable) + 1
+                  args[index:index] = ["-ex", "target remote 127.0.0.1:" + str(port)]
+                  code = subprocess.call([os.environ["LLGO_RAW_GDB"], *args])
+              finally:
+                  server.kill()
+                  server.wait()
+          print(log_path.read_text(errors="replace"), file=sys.stderr)
+          sys.exit(code)
+          PY
           chmod +x "$wrapper"
           echo "LLGO_GDB=$wrapper" >> "$GITHUB_ENV"
       - name: Run the preceding LLDB acceptance as in the actual job
