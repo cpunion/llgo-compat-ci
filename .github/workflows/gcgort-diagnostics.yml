@@ -214,13 +214,13 @@ jobs:
           import sys
           from pathlib import Path
 
-          os.add_dll_directory(str(Path(os.environ["LLGO_LLDB"]).parent))
+          dll_directory = os.add_dll_directory(str(Path(os.environ["LLGO_LLDB"]).parent))
           import lldb
 
           lldb.SBDebugger.Initialize()
           debugger = lldb.SBDebugger.Create()
           debugger.SetAsync(False)
-          target = debugger.CreateTarget()
+          target = debugger.CreateTarget("")
           error = lldb.SBError()
           process = target.AttachToProcessWithID(debugger.GetListener(), int(sys.argv[1]), error)
           print("attach", error, "threads", process.GetNumThreads(), flush=True)
