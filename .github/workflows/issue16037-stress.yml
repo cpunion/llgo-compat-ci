@@ -253,7 +253,7 @@ jobs:
                 $child.Refresh()
                 if ($timer.Elapsed.TotalSeconds - $lastMemorySample -ge 1) {
                   $lastMemorySample = $timer.Elapsed.TotalSeconds
-                  $processes = @(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate.ToUniversalTime() -ge $child.StartTime.ToUniversalTime() })
+                  $processes = @(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -and $_.CreationDate.ToUniversalTime() -ge $child.StartTime.ToUniversalTime() })
                   $descendants = @($child.Id)
                   foreach ($depth in 1..5) {
                     $descendants += @($processes | Where-Object { $_.ParentProcessId -in $descendants } | Select-Object -ExpandProperty ProcessId)
@@ -277,7 +277,7 @@ jobs:
                       -ArgumentList @("--batch", "--nx", "--pid=$targetId", "--command=$commands") `
                       -RedirectStandardOutput $targetTrace -RedirectStandardError "$targetTrace.stderr" -PassThru
                     if (-not $debugger.WaitForExit(10000)) { $debugger.Kill() }
-                    Write-Host "Captured stalled original PID $targetId: $targetTrace"
+                    Write-Host "Captured stalled original PID ${targetId}: $targetTrace"
                   }
                 }
                 if ($timer.Elapsed.TotalSeconds -ge 60) { $limit = "60s timeout" }
