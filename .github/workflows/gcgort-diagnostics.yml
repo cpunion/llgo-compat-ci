@@ -216,9 +216,9 @@ jobs:
               while (-not $runner.WaitForExit(1000)) {
                 foreach ($child in @(Get-Process -Name llgo -ErrorAction SilentlyContinue)) {
                   try {
-                    $exe = $child.Path
+                    $exe = $child.Path.Replace([char]92, [char]47)
                     $started = $child.StartTime.ToUniversalTime()
-                    if ($exe -notmatch '[\/]llgo-goroot-[^\/]+[\/]llgo\.exe$') { continue }
+                    if ($exe -notmatch '/llgo-goroot-[^/]+/llgo[.]exe$') { continue }
                     if (([DateTime]::UtcNow - $started).TotalSeconds -lt 20) { continue }
                     $identity = "$($child.Id)-$($started.Ticks)"
                     if ($captured.ContainsKey($identity)) { continue }
