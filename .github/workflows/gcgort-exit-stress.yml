@@ -216,7 +216,7 @@ jobs:
             if ($runner.ExitCode -ne 0) { $failed = $true }
             Get-Content (Join-Path $logRoot "go$version-runner.stdout")
             Get-Content (Join-Path $logRoot "go$version-runner.stderr")
-            $work = @(Get-ChildItem $env:RUNNER_TEMP -Directory -Filter "llgo-goroot-*" | `
+            $work = @(Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter "llgo-goroot-*" | `
               Where-Object { $_.CreationTimeUtc -ge $started -and (Test-Path (Join-Path $_.FullName "llgo.out.exe")) })
             if ($work.Count -ne 1) { throw "Expected one preserved original artifact, got $($work.Count)" }
             $exe = Join-Path $work[0].FullName "llgo.out.exe"
