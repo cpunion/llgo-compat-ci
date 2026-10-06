@@ -45,7 +45,7 @@ class CoverageTests(unittest.TestCase):
                 path.write_text(json.dumps({"profile": profile, "shard": index, "shards": total}))
         return native_dir, wasm_dir
 
-    def test_mixed_windows_splits_cover_every_hash_once(self):
+    def test_mixed_windows_splits_cover_every_index_once(self):
         shards = [(index, 8) for index in range(8) if index != 5]
         shards += [(5, 32), (13, 32), (21, 32), (29, 64), (61, 64)]
         self.assertIsNone(check_partition(shards))

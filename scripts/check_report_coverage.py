@@ -29,7 +29,7 @@ WASM_SHARDS = {
 
 
 def check_partition(shards):
-    """Hash residues must be disjoint and cover the entire corpus."""
+    """Case-index residues must be disjoint and cover the entire corpus."""
     for index, total in shards:
         if total <= 0 or not 0 <= index < total:
             return f"invalid shard {index}/{total}"
