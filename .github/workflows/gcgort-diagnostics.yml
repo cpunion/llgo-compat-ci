@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: 254723f2a817ea526ef6fb3e687d5849cee33e9c
+          ref: e65db962b6d25ad12349caa1734b042108ffef5d
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
@@ -180,7 +180,7 @@ jobs:
           GOROOT: ${{ steps.build-tools.outputs.goroot }}
         run: |
           build_go="$GOROOT/bin/go.exe"
-          env CGO_ENABLED=0 GOARCH="$("$build_go" env GOHOSTARCH)" "$build_go" test ./test/goroot -run '^TestWindows(ProcessTree|ProcessIdentity|ProcessTermination)' -count=1 -timeout=3m
+          env CGO_ENABLED=0 GOARCH="$("$build_go" env GOHOSTARCH)" "$build_go" test ./test/goroot -run '^TestWindows(ProcessTree|ProcessIdentity|ProcessTermination)|^TestRunnerEnvPreservesWindowsPath$' -count=1 -timeout=3m
 
       - name: Reproduce gcgort and capture hung thread stacks
         shell: pwsh
