@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: 3cdb88d52b6ad51e2f4aa0f5b1d06456810b8ec2
+          ref: 209abd50c821f3065e67e2ae92a28015fb47bac8
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
@@ -205,6 +205,31 @@ jobs:
           $env:PATH = (Join-Path $env:GOROOT "bin") + ";" + $env:PATH
           & .github/workflows/test_windows_runtime.ps1 -LLGo $env:LLGO_TEST_LLGO -Profile msvc -GoArch amd64
           if ($LASTEXITCODE -ne 0) { throw "Windows runtime fixtures failed" }
+
+      - name: Verify C stdio output with redirected streams
+        if: always()
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          GOROOT: ${{ steps.go127.outputs.goroot }}
+          GOTOOLCHAIN: local
+        run: |
+          $ErrorActionPreference = "Stop"
+          Remove-Item Env:LLGO_STDIO_NOBUF -ErrorAction SilentlyContinue
+          $env:PATH = (Join-Path $env:GOROOT "bin") + ";" + $env:PATH
+          $exe = Join-Path $env:RUNNER_TEMP "cprintf-exit.exe"
+          & $env:LLGO_TEST_LLGO build -o $exe ./_demo/c/helloc
+          if ($LASTEXITCODE -ne 0) { throw "C printf fixture build failed" }
+          $stdout = Join-Path $env:RUNNER_TEMP "cprintf-exit.stdout"
+          $stderr = Join-Path $env:RUNNER_TEMP "cprintf-exit.stderr"
+          $child = Start-Process -FilePath $exe -NoNewWindow -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          if (-not $child.WaitForExit(20000)) { $child.Kill(); throw "C printf fixture exit timed out" }
+          $child.WaitForExit()
+          $actual = (Get-Content -Raw $stdout).Replace("`r`n", "`n")
+          if ($child.ExitCode -ne 0 -or $actual -ne "Hello world by c.Printf`n8`n8`n" -or (Get-Item $stderr).Length) {
+            throw "C printf exit lost output or failed: code=$($child.ExitCode), output=$actual"
+          }
 
       - name: Repeated original gcgort acceptance
         if: always()
