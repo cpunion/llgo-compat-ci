@@ -479,6 +479,30 @@ jobs:
 
           status=0
           serial_versions=0
+          # rangegen's generated builds peak above 3 GiB apiece on MinGW
+          # amd64. Find the case in the actual platform/version corpus so
+          # two builds do not compete for the hosted runner's memory.
+          if [[ "$RUNNER_OS" == "Windows" && "${{ matrix.windows_abi }}" == "mingw" && "${{ matrix.windows_arch }}" == "amd64" ]]; then
+            for selection in "${{ steps.go126.outputs.version }}:$shard_index" "${{ steps.go127.outputs.version }}:$paired_shard_index"; do
+              version=${selection%:*}
+              target_shard=${selection##*:}
+              target_goroot=$GO126_GOROOT
+              if [[ "$version" == "${{ steps.go127.outputs.version }}" ]]; then
+                target_goroot=$GO127_GOROOT
+              fi
+              case_list="$RUNNER_TEMP/goroot-cases-go${version}.txt"
+              (
+                cd test/goroot
+                "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' -test.count=1 \
+                  -goroot "$target_goroot" -directive-mode ci -list-case-paths \
+                  -shard-index "$target_shard" -shard-total "$LLGO_GOROOT_SHARD_TOTAL"
+              ) >"$case_list" 2>&1
+              if grep -Eq '(^|[[:space:]])rangegen\.go$' "$case_list"; then
+                serial_versions=1
+              fi
+              rm -f "$case_list"
+            done
+          fi
           if [[ "$LLGO_GOROOT_SHARD_TOTAL" == "8" ]] && {
             [[ "$RUNNER_OS" == "Linux" && "$shard_index" == "6" ]] ||
             [[ "$RUNNER_OS" == "macOS" && "$shard_index" == "5" ]]
