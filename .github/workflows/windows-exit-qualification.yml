@@ -195,6 +195,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Concurrent GC/exit regression failed" }
 
       - name: Verify minimal GC and nogc executables
+        if: always()
         shell: pwsh
         timeout-minutes: 15
         env:
@@ -206,6 +207,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows runtime fixtures failed" }
 
       - name: Repeated original gcgort acceptance
+        if: always()
         shell: pwsh
         env:
           GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
