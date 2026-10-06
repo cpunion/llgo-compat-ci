@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: 209abd50c821f3065e67e2ae92a28015fb47bac8
+          ref: b74cc1bdc98e88a12a81a773ff2ef08a79dba123
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
