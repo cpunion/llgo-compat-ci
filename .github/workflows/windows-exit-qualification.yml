@@ -185,15 +185,23 @@ jobs:
       - name: Verify concurrent GC and process exit
         shell: pwsh
         timeout-minutes: 10
+        env:
+          GOROOT: ${{ steps.go127.outputs.goroot }}
+          GOTOOLCHAIN: local
         run: |
           $env:LLGO_ROOT = $env:GITHUB_WORKSPACE
+          $env:PATH = (Join-Path $env:GOROOT "bin") + ";" + $env:PATH
           & $env:LLGO_TEST_LLGO test ./test/go -run '^TestWindowsExitDuringGC$' -count=1
           if ($LASTEXITCODE -ne 0) { throw "Concurrent GC/exit regression failed" }
 
       - name: Verify minimal GC and nogc executables
         shell: pwsh
         timeout-minutes: 15
+        env:
+          GOROOT: ${{ steps.go127.outputs.goroot }}
+          GOTOOLCHAIN: local
         run: |
+          $env:PATH = (Join-Path $env:GOROOT "bin") + ";" + $env:PATH
           & .github/workflows/test_windows_runtime.ps1 -LLGo $env:LLGO_TEST_LLGO -Profile msvc -GoArch amd64
           if ($LASTEXITCODE -ne 0) { throw "Windows runtime fixtures failed" }
 

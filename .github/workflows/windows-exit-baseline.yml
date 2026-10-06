@@ -190,7 +190,11 @@ jobs:
       - name: Reproduce concurrent GC and process exit
         shell: pwsh
         timeout-minutes: 10
+        env:
+          GOROOT: ${{ steps.go127.outputs.goroot }}
+          GOTOOLCHAIN: local
         run: |
           $env:LLGO_ROOT = $env:GITHUB_WORKSPACE
+          $env:PATH = (Join-Path $env:GOROOT "bin") + ";" + $env:PATH
           & $env:LLGO_TEST_LLGO test ./test/go -run '^TestWindowsExitDuringGC$' -count=1
           if ($LASTEXITCODE -ne 0) { throw "Original runtime failed the GC/exit regression" }
