@@ -185,7 +185,7 @@ jobs:
       - name: Add the regression to the original runtime
         shell: pwsh
         run: |
-          Invoke-WebRequest 'https://raw.githubusercontent.com/cpunion/llgo/798d238af9b60c06c36922734f49d23d9ee59187/test/go/windows_exit_gc_test.go' -OutFile test/go/windows_exit_gc_test.go
+          Invoke-WebRequest 'https://raw.githubusercontent.com/cpunion/llgo/17cc9397f3c916bada0732af1eaa9641734a0b65/test/go/windows_exit_gc_test.go' -OutFile test/go/windows_exit_gc_test.go
 
       - name: Reproduce concurrent GC and process exit
         shell: pwsh
@@ -196,5 +196,5 @@ jobs:
         run: |
           $env:LLGO_ROOT = $env:GITHUB_WORKSPACE
           $env:PATH = (Join-Path $env:GOROOT "bin") + ";" + $env:PATH
-          & $env:LLGO_TEST_LLGO test ./test/go -run '^TestWindowsExitDuringGC$' -count=1
+          & $env:LLGO_TEST_LLGO test ./test/go -run '^TestWindowsExitDuringGC$' -count=3
           if ($LASTEXITCODE -ne 0) { throw "Original runtime failed the GC/exit regression" }
