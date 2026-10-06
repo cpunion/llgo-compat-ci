@@ -428,6 +428,12 @@ jobs:
           go env GOPROXY GOMODCACHE
           clang --version
 
+      - name: Verify Windows process identity regressions
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          env CGO_ENABLED=0 GOARCH="$(go env GOHOSTARCH)" go test ./test/goroot -run '^TestWindows(ProcessTree|ProcessIdentity|ProcessTermination)' -count=1 -timeout=3m
+
       - name: Run GOROOT runner
         shell: bash
         env:
