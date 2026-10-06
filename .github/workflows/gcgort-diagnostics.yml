@@ -182,19 +182,8 @@ jobs:
           build_go="$GOROOT/bin/go.exe"
           env CGO_ENABLED=0 GOARCH="$("$build_go" env GOHOSTARCH)" "$build_go" test ./test/goroot -run '^TestWindows(ProcessTree|ProcessIdentity|ProcessTermination)|^TestRunnerEnvPreservesWindowsPath$' -count=1 -timeout=3m
 
-      - name: Install LLDB's Python runtime
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.11.9'
-          architecture: x64
-
-      - name: Verify the native debugger
-        shell: pwsh
-        run: |
-          $env:PYTHONHOME = $env:pythonLocation
-          $env:PYTHONPATH = $env:LLGO_WINDOWS_LLDB_PYTHONPATH
-          & $env:LLGO_LLDB --batch -o 'script import sys; print(sys.version)'
-          if ($LASTEXITCODE -ne 0) { throw "Native LLDB initialization failed" }
+      - name: Install native GDB
+        uses: ./.github/actions/setup-gdb
 
       - name: Reproduce gcgort and capture hung thread stacks
         shell: pwsh
@@ -204,38 +193,18 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $env:LLGO_STDIO_NOBUF = "1"
-          $env:PYTHONHOME = $env:pythonLocation
-          $env:PYTHONPATH = $env:LLGO_WINDOWS_LLDB_PYTHONPATH
+          Remove-Item Env:PYTHONHOME, Env:PYTHONPATH -ErrorAction SilentlyContinue
           $logRoot = Join-Path $env:RUNNER_TEMP "gcgort-stacks"
           New-Item -ItemType Directory -Force $logRoot | Out-Null
-          $stackScript = Join-Path $logRoot "capture_stacks.py"
+          $commands = Join-Path $logRoot "stacks.gdb"
           @'
-          import os
-          import sys
-          from pathlib import Path
-
-          dll_directory = os.add_dll_directory(str(Path(os.environ["LLGO_LLDB"]).parent))
-          import lldb
-
-          lldb.SBDebugger.Initialize()
-          debugger = lldb.SBDebugger.Create()
-          debugger.SetAsync(False)
-          target = debugger.CreateTarget("")
-          error = lldb.SBError()
-          process = target.AttachToProcessWithID(debugger.GetListener(), int(sys.argv[1]), error)
-          print("attach", error, "threads", process.GetNumThreads(), flush=True)
-          try:
-              for thread in process:
-                  print("THREAD", thread.GetThreadID(), thread.GetStopDescription(256), flush=True)
-                  for index, frame in enumerate(thread):
-                      if index >= 32:
-                          break
-                      print(index, hex(frame.GetPC()), str(frame.GetModule().GetFileSpec()),
-                            frame.GetFunctionName() or frame.GetSymbol().GetName(), flush=True)
-          finally:
-              print("detach", process.Detach(), flush=True)
-              lldb.SBDebugger.Destroy(debugger)
-          '@ | Set-Content -Encoding utf8 $stackScript
+          set pagination off
+          set confirm off
+          set debuginfod enabled off
+          thread apply all bt 32
+          detach
+          quit
+          '@ | Set-Content -Encoding ascii $commands
           $failed = $false
           foreach ($iteration in 1..6) {
             foreach ($version in @("1.26", "1.27")) {
@@ -268,10 +237,10 @@ jobs:
                     $captured[$identity] = $true
                     $trace = Join-Path $logRoot "go$version-iteration$iteration-thread-$identity.txt"
                     $traceErrors = "$trace.stderr"
-                    $debugger = Start-Process -FilePath (Join-Path $env:pythonLocation "python.exe") `
-                      -ArgumentList @($stackScript, $child.Id) -NoNewWindow `
+                    $debugger = Start-Process -FilePath $env:LLGO_GDB -NoNewWindow `
+                      -ArgumentList @("--batch", "--nx", "--pid=$($child.Id)", "--command=$commands") `
                       -RedirectStandardOutput $trace -RedirectStandardError $traceErrors -PassThru
-                    if (-not $debugger.WaitForExit(20000)) { $debugger.Kill() }
+                    if (-not $debugger.WaitForExit(10000)) { $debugger.Kill() }
                     Write-Host "Captured PID $($child.Id) after twenty seconds: $trace"
                   } catch {
                     Write-Host "Stack capture unavailable for PID $($child.Id): $_"
