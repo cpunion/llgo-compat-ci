@@ -480,13 +480,12 @@ jobs:
           status=0
           serial_versions=0
           # Keep the million-call reflection stress loop isolated from its
-          # paired compiler. MinGW's rangegen builds also peak above 3 GiB
+          # paired compiler. The 64-bit rangegen builds also peak above 3 GiB
           # apiece. Find these cases in the actual platform/version corpus.
-          if [[ "$RUNNER_OS" == "Windows" && "${{ matrix.windows_arch }}" == "amd64" ]]; then
-            serial_cases='(^|[[:space:]])fixedbugs/issue39541\.go$'
-            if [[ "${{ matrix.windows_abi }}" == "mingw" ]]; then
-              serial_cases='(^|[[:space:]])(rangegen\.go|fixedbugs/issue39541\.go)$'
-            fi
+          if [[ "$RUNNER_OS" == "Windows" ]] && {
+            [[ "${{ matrix.windows_arch }}" == "amd64" ]] || [[ "${{ matrix.windows_arch }}" == "arm64" ]]
+          }; then
+            serial_cases='(^|[[:space:]])(rangegen\.go|fixedbugs/issue39541\.go)$'
             for selection in "${{ steps.go126.outputs.version }}:$shard_index" "${{ steps.go127.outputs.version }}:$paired_shard_index"; do
               version=${selection%:*}
               target_shard=${selection##*:}
