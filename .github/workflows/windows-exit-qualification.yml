@@ -218,8 +218,12 @@ jobs:
           Remove-Item Env:LLGO_STDIO_NOBUF -ErrorAction SilentlyContinue
           $env:PATH = (Join-Path $env:GOROOT "bin") + ";" + $env:PATH
           $exe = Join-Path $env:RUNNER_TEMP "cprintf-exit.exe"
-          & $env:LLGO_TEST_LLGO build -o $exe ./_demo/c/helloc
-          if ($LASTEXITCODE -ne 0) { throw "C printf fixture build failed" }
+          $env:LLGO_ROOT = $env:GITHUB_WORKSPACE
+          Push-Location _demo/c/helloc
+          try {
+            & $env:LLGO_TEST_LLGO build -o $exe .
+            if ($LASTEXITCODE -ne 0) { throw "C printf fixture build failed" }
+          } finally { Pop-Location }
           $stdout = Join-Path $env:RUNNER_TEMP "cprintf-exit.stdout"
           $stderr = Join-Path $env:RUNNER_TEMP "cprintf-exit.stderr"
           $child = Start-Process -FilePath $exe -NoNewWindow -PassThru `
