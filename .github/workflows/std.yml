@@ -373,7 +373,9 @@ jobs:
   wasm-browser:
     name: real-browser GoJS callback and worker acceptance
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Complete Node/Chrome worker acceptance takes about 25 minutes before
+    # dependency setup and the GoJS browser smoke; retain its per-case limits.
+    timeout-minutes: 45
     env:
       GOFLAGS: -tags=llvm22
       LLGO_BUILD_CACHE: 'on'
