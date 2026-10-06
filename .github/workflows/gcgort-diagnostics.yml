@@ -182,6 +182,20 @@ jobs:
           build_go="$GOROOT/bin/go.exe"
           env CGO_ENABLED=0 GOARCH="$("$build_go" env GOHOSTARCH)" "$build_go" test ./test/goroot -run '^TestWindows(ProcessTree|ProcessIdentity|ProcessTermination)|^TestRunnerEnvPreservesWindowsPath$' -count=1 -timeout=3m
 
+      - name: Install LLDB's Python runtime
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11.9'
+          architecture: x64
+
+      - name: Verify the native debugger
+        shell: pwsh
+        run: |
+          $env:PYTHONHOME = $env:pythonLocation
+          $env:PYTHONPATH = $env:LLGO_WINDOWS_LLDB_PYTHONPATH
+          & $env:LLGO_LLDB --batch -o 'script import sys; print(sys.version)'
+          if ($LASTEXITCODE -ne 0) { throw "Native LLDB initialization failed" }
+
       - name: Reproduce gcgort and capture hung thread stacks
         shell: pwsh
         env:
@@ -190,6 +204,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $env:LLGO_STDIO_NOBUF = "1"
+          $env:PYTHONHOME = $env:pythonLocation
           $env:PYTHONPATH = $env:LLGO_WINDOWS_LLDB_PYTHONPATH
           $logRoot = Join-Path $env:RUNNER_TEMP "gcgort-stacks"
           New-Item -ItemType Directory -Force $logRoot | Out-Null
