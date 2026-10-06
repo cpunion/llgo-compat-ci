@@ -24,11 +24,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # Qualify this contribution against its paired compiler revision.
-  # Other PRs and scheduled/manual runs without an override still use main.
-  LLGO_PR_TEST_REF: 02c52ea0ba602d4a304fa38e146927fabf461f7f
-
 concurrency:
   # Preserve scheduled/manual reports, but give the latest PR revision the
   # runners instead of finishing obsolete contribution checks.
@@ -304,7 +299,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || (github.event.pull_request.number == 37 && env.LLGO_PR_TEST_REF) || 'main' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
@@ -656,7 +651,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || (github.event.pull_request.number == 37 && env.LLGO_PR_TEST_REF) || 'main' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
@@ -944,7 +939,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || (github.event.pull_request.number == 37 && env.LLGO_PR_TEST_REF) || 'main' }}
+          ref: ${{ inputs.llgo_ref || 'main' }}
 
       - name: Set up Go for the report generator
         uses: ./.github/actions/setup-go
