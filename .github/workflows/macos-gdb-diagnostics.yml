@@ -99,7 +99,8 @@ jobs:
           system = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
           attributes = ctypes.c_void_p()
           assert system.posix_spawnattr_init(ctypes.byref(attributes)) == 0
-          assert system.posix_spawnattr_setflags(ctypes.byref(attributes), 0x0080) == 0
+          # Match GDB's normal Darwin launch: suspend at entry and disable ASLR.
+          assert system.posix_spawnattr_setflags(ctypes.byref(attributes), 0x0180) == 0
           argv = (ctypes.c_char_p * 2)(os.fsencode(executable), None)
           values = [os.fsencode(key + "=" + value) for key, value in os.environ.items()]
           environ = (ctypes.c_char_p * (len(values) + 1))(*values, None)
