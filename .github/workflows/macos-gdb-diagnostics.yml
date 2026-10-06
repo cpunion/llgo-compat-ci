@@ -87,8 +87,17 @@ jobs:
           go build -o "$RUNNER_TEMP/llgo-bin/llgo" ./cmd/llgo
           echo "$RUNNER_TEMP/llgo-bin" >> "$GITHUB_PATH"
           echo "LLGO_ROOT=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
-          echo "LLGO_RAW_GDB=$LLGO_GDB" >> "$GITHUB_ENV"
-          echo "LLGO_DEBUGSERVER=$(xcrun --find debugserver)" >> "$GITHUB_ENV"
+          developer_dir="$(xcode-select -p)"
+          if command -v rg > /dev/null; then
+            debugserver="$(rg --files --hidden --no-ignore "$developer_dir/.." | rg '/debugserver$' | head -1)"
+          else
+            debugserver="$(find "$developer_dir/.." -type f -name debugserver -print -quit)"
+          fi
+          test -n "$debugserver" && test -x "$debugserver"
+          {
+            echo "LLGO_RAW_GDB=$LLGO_GDB"
+            echo "LLGO_DEBUGSERVER=$debugserver"
+          } >> "$GITHUB_ENV"
           wrapper="$RUNNER_TEMP/llgo-gdb-native"
           cat > "$wrapper" <<'PY'
           #!/usr/bin/env python3
@@ -145,7 +154,7 @@ jobs:
           PY
       - name: Run the C controls after the cold LLGo launches
         if: always()
-        run: python3 "$RUNNER_TEMP/gdb-diagnostics/controls.py"
+        run: LLGO_GDB="$LLGO_RAW_GDB" python3 "$RUNNER_TEMP/gdb-diagnostics/controls.py"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
