@@ -24,7 +24,7 @@ jobs:
           #include <stdio.h>
           int main(void) { puts("C launch completed"); return 0; }
           EOF
-          clang -g -O0 "$RUNNER_TEMP/gdb-diagnostics/control.c" -o "$RUNNER_TEMP/gdb-diagnostics/control"
+          clang -gdwarf-4 -O0 "$RUNNER_TEMP/gdb-diagnostics/control.c" -o "$RUNNER_TEMP/gdb-diagnostics/control"
           cat > "$RUNNER_TEMP/gdb-diagnostics/watch.py" <<'PY'
           import os, pathlib, signal, subprocess, sys
           root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "gdb-diagnostics"
@@ -52,7 +52,7 @@ jobs:
                   subprocess.run(["sudo", "-n", "kill", "-KILL", "--", "-" + str(process.pid)], check=False)
                   process.wait(timeout=10)
                   code = 124
-          print((root / (name + ".log")).read_text(), flush=True)
+          print((root / (name + ".log")).read_text(errors="replace"), flush=True)
           print("RESULT:", name, code, flush=True)
           sys.exit(code)
           PY
@@ -62,13 +62,12 @@ jobs:
           cases = {
               "c-direct": ["set startup-with-shell off"],
               "c-shell": ["set startup-with-shell on"],
-              "c-aslr": ["set startup-with-shell off", "set disable-randomization off"],
           }
           for name, settings in cases.items():
               command = ["python3", str(root / "watch.py"), name, "60", "sudo", "-n", os.environ["LLGO_GDB"], "--batch", "--nx", str(root / "control")]
-              for setting in ["set trace-commands on", "set debug darwin 1", *settings, "break main", "run", "bt", "continue"]:
+              for setting in ["set trace-commands on", "set debug darwin 10", *settings, "break main", "run", "bt", "continue"]:
                   command.extend(["-ex", setting])
-              # Keep every result; the three settings are controls, not retries.
+              # Keep every result; the two settings are controls, not retries.
               subprocess.run(command, check=False)
           PY
       - uses: ./.github/actions/setup-deps
@@ -84,14 +83,23 @@ jobs:
           echo "$RUNNER_TEMP/llgo-bin" >> "$GITHUB_PATH"
           echo "LLGO_ROOT=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
           wrapper="$RUNNER_TEMP/llgo-gdb-native"
-          printf '#!/bin/bash\nexec sudo -n %q "$@"\n' "$LLGO_GDB" > "$wrapper"
+          printf '#!/bin/bash\nexec sudo -n %q -iex "set debug darwin 10" "$@"\n' "$LLGO_GDB" > "$wrapper"
           chmod +x "$wrapper"
           echo "LLGO_GDB=$wrapper" >> "$GITHUB_ENV"
       - name: Capture actual LLGo adapter integration
         shell: bash
         env:
           LLGO_GDB_INTEGRATION: "1"
-        run: python3 "$RUNNER_TEMP/gdb-diagnostics/watch.py" llgo-integration 150 go test ./cmd/internal/gdb -run '^TestGDBIntegration$' -count=1 -v
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, subprocess, sys
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "gdb-diagnostics"
+          failed = False
+          for i in range(12):
+              result = subprocess.run(["python3", str(root / "watch.py"), "llgo-integration-" + str(i), "150", "go", "test", "./cmd/internal/gdb", "-run", "^TestGDBIntegration$", "-count=1", "-v"])
+              failed |= result.returncode != 0
+          sys.exit(int(failed))
+          PY
       - uses: actions/upload-artifact@v7
         if: always()
         with:
