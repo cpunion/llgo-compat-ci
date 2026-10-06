@@ -30,10 +30,10 @@ env:
   LLGO_PR_TEST_REF: 02c52ea0ba602d4a304fa38e146927fabf461f7f
 
 concurrency:
-  # Periodic compatibility runs are reports, so a later invocation must not
-  # cancel one that has already consumed hosted-runner time.
+  # Preserve scheduled/manual reports, but give the latest PR revision the
+  # runners instead of finishing obsolete contribution checks.
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   goroot:
