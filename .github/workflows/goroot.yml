@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/goroot.yml
+      - scripts/**
   workflow_dispatch:
     inputs:
       llgo_repository:
@@ -45,8 +46,159 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Validate only the last runner-lost shard, split in half.
+        # GOROOT is the compiler's primary compatibility suite. Always cover
+        # the two most recent Go releases; LLGo and this runner are still built
+        # once per job with the current toolchain from .go-version.
+        os: [macos-latest, ubuntu-latest, windows-2022, windows-11-arm]
+        windows_abi: [msvc, mingw]
+        windows_arch: [amd64, arm64, "386"]
+        # Eight native shards keep paired Go 1.26/1.27 jobs near the per-job
+        # latency target without returning to a version-expanded job matrix.
+        shard-index: ["0", "1", "2", "3", "4", "5", "6", "7"]
+        shard-total: ["8"]
+        exclude:
+          - os: macos-latest
+            windows_abi: mingw
+          - os: ubuntu-latest
+            windows_abi: mingw
+          - os: macos-latest
+            windows_arch: arm64
+          - os: macos-latest
+            windows_arch: "386"
+          - os: ubuntu-latest
+            windows_arch: arm64
+          - os: ubuntu-latest
+            windows_arch: "386"
+          - os: windows-2022
+            windows_arch: arm64
+          - os: windows-11-arm
+            windows_arch: amd64
+          - os: windows-11-arm
+            windows_arch: "386"
+          # The paired MSVC/386 shard 1/8 outlived its hosted runner.
+          - os: windows-2022
+            windows_abi: msvc
+            windows_arch: "386"
+            shard-index: "1"
+            shard-total: "8"
+          # These Windows ARM shards have repeatedly lost their hosted runner.
+          # Split only the affected shards below.
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "0"
+            shard-total: "8"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "1"
+            shard-total: "8"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "5"
+            shard-total: "8"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "6"
+            shard-total: "8"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "0"
+            shard-total: "8"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "4"
+            shard-total: "8"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "6"
+            shard-total: "8"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "7"
+            shard-total: "8"
         include:
+          # These entries exactly partition the excluded 1/8 shards and their
+          # paired Go-version shards. Only subshards that still reach the
+          # hosted-runner limit are split beyond 1/16.
+          - os: windows-2022
+            windows_abi: msvc
+            windows_arch: "386"
+            shard-index: "1"
+            shard-total: "16"
+            paired-shard-index: "5"
+          - os: windows-2022
+            windows_abi: msvc
+            windows_arch: "386"
+            shard-index: "9"
+            shard-total: "16"
+            paired-shard-index: "13"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "0"
+            shard-total: "16"
+            paired-shard-index: "4"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "8"
+            shard-total: "16"
+            paired-shard-index: "12"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "1"
+            shard-total: "64"
+            paired-shard-index: "5"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "33"
+            shard-total: "64"
+            paired-shard-index: "37"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "17"
+            shard-total: "64"
+            paired-shard-index: "21"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "49"
+            shard-total: "64"
+            paired-shard-index: "53"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "9"
+            shard-total: "16"
+            paired-shard-index: "13"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "5"
+            shard-total: "32"
+            paired-shard-index: "1"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "21"
+            shard-total: "32"
+            paired-shard-index: "17"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "13"
+            shard-total: "32"
+            paired-shard-index: "9"
           - os: windows-11-arm
             windows_abi: msvc
             windows_arch: arm64
@@ -59,6 +211,80 @@ jobs:
             shard-index: "61"
             shard-total: "64"
             paired-shard-index: "57"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "6"
+            shard-total: "16"
+            paired-shard-index: "2"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "14"
+            shard-total: "32"
+            paired-shard-index: "10"
+          - os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+            shard-index: "30"
+            shard-total: "32"
+            paired-shard-index: "26"
+          # Preserve the paired Go 1.26/1.27 partition of MinGW ARM64 while
+          # halving the four shards that lost hosted runners on recent runs.
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "0"
+            shard-total: "16"
+            paired-shard-index: "4"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "8"
+            shard-total: "32"
+            paired-shard-index: "12"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "24"
+            shard-total: "32"
+            paired-shard-index: "28"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "4"
+            shard-total: "16"
+            paired-shard-index: "0"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "12"
+            shard-total: "16"
+            paired-shard-index: "8"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "6"
+            shard-total: "16"
+            paired-shard-index: "2"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "14"
+            shard-total: "16"
+            paired-shard-index: "10"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "7"
+            shard-total: "16"
+            paired-shard-index: "3"
+          - os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+            shard-index: "15"
+            shard-total: "16"
+            paired-shard-index: "11"
     runs-on: ${{ matrix.os }}
     steps:
       - name: Record expected matrix reports
@@ -315,9 +541,9 @@ jobs:
             fi
 
             report_id="${platform//\//-}-${go_version}-${actual_shard}"
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
               "$platform" "$go_version" "$actual_shard" "$selected" \
-              "$observed" "$passed" "$failed" "$skipped" \
+              "$observed" "$passed" "$failed" "$skipped" "$shard_total" \
               >"$report_dir/summary-$report_id.tsv"
             awk -F '\t' \
               -v platform="$platform" \
@@ -365,9 +591,6 @@ jobs:
 
   goroot-wasm:
     name: GOROOT (wasm, ${{ matrix.wasm_profile }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/16)
-    if: >-
-      ${{ github.event_name != 'pull_request' ||
-          github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923' }}
     timeout-minutes: 180
     runs-on: ubuntu-24.04
     outputs:
@@ -630,9 +853,9 @@ jobs:
             fi
 
             report_id="${platform//\//-}-${go_version}-${actual_shard}"
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
               "$platform" "$go_version" "$actual_shard" "$selected" \
-              "$observed" "$passed" "$failed" "$skipped" \
+              "$observed" "$passed" "$failed" "$skipped" "$shard_total" \
               >"$report_dir/summary-$report_id.tsv"
             awk -F '\t' \
               -v platform="$platform" \
@@ -678,10 +901,7 @@ jobs:
 
   goroot-summary:
     name: GOROOT summary
-    if: >-
-      ${{ always() &&
-          (github.event_name != 'pull_request' ||
-           github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923') }}
+    if: always()
     needs: [goroot, goroot-wasm]
     runs-on: ubuntu-24.04
     permissions:
@@ -695,6 +915,14 @@ jobs:
 
       - name: Set up Go for the report generator
         uses: ./.github/actions/setup-go
+
+      - name: Check out compatibility report checks
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+
+      - name: Verify coverage checker regressions
+        run: python3 -m unittest discover -s compatibility-ci/scripts -p 'test_*.py'
 
       - name: Download shard statistics
         continue-on-error: true
@@ -730,9 +958,17 @@ jobs:
           fi
 
           report_count=$(wc -l <"$summary_tsv" | tr -d ' ')
-          report_platforms=$(cut -f1 "$summary_tsv" | sort -u | paste -sd, -)
+          # The required platform set is independent of the received artifacts.
+          # Missing platforms must remain visible even if a matrix is narrowed.
+          report_platforms=$(python3 -c 'import sys; sys.path.insert(0, "compatibility-ci/scripts"); from check_report_coverage import GOROOT_PLATFORMS; print(",".join(GOROOT_PLATFORMS))')
           go126="$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)"
           go127="$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)"
+          coverage_md="$RUNNER_TEMP/goroot-coverage.md"
+          coverage_ok=0
+          if python3 compatibility-ci/scripts/check_report_coverage.py goroot \
+            --summary "$summary_tsv" --versions "$go126,$go127" >"$coverage_md"; then
+            coverage_ok=1
+          fi
           write_row() {
             local label=$1
             local platform=$2
@@ -766,6 +1002,7 @@ jobs:
             echo
             echo "Received $report_count/$expected_reports shard reports (two Go versions per configured matrix job)."
             echo
+            cat "$coverage_md"
             echo '| Platform / toolchain | Shards | Selected | Observed | Passed | Failed | Skipped |'
             echo '|---|---:|---:|---:|---:|---:|---:|'
             IFS=, read -r -a platforms <<<"$report_platforms"
@@ -794,6 +1031,7 @@ jobs:
             echo "GOROOT_REPORT=$report_md"
             echo "GOROOT_REPORT_COUNT=$report_count"
             echo "GOROOT_EXPECTED_REPORT_COUNT=$expected_reports"
+            echo "GOROOT_COVERAGE_OK=$coverage_ok"
           } >>"$GITHUB_ENV"
 
       - name: Preserve GOROOT summary report
@@ -848,6 +1086,10 @@ jobs:
           GOROOT_RESULT: ${{ needs.goroot.result }}
           WASM_RESULT: ${{ needs.goroot-wasm.result }}
         run: |
+          if [[ "$GOROOT_COVERAGE_OK" != 1 ]]; then
+            echo "error: incomplete GOROOT platform/version/shard coverage" >&2
+            exit 1
+          fi
           if [[ "$GOROOT_REPORT_COUNT" -ne "$GOROOT_EXPECTED_REPORT_COUNT" ]]; then
             echo "error: expected $GOROOT_EXPECTED_REPORT_COUNT shard reports, got $GOROOT_REPORT_COUNT" >&2
             exit 1

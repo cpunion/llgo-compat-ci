@@ -495,6 +495,14 @@ jobs:
       - name: Set up Go for the report generator
         uses: ./.github/actions/setup-go
 
+      - name: Check out compatibility report checks
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+
+      - name: Verify coverage checker regressions
+        run: python3 -m unittest discover -s compatibility-ci/scripts -p 'test_*.py'
+
       - name: Download native reports
         continue-on-error: true
         uses: actions/download-artifact@v8
@@ -516,6 +524,12 @@ jobs:
         if: always()
         run: |
           report_md="$RUNNER_TEMP/std-report.md"
+          coverage_md="$RUNNER_TEMP/std-coverage.md"
+          coverage_ok=0
+          if python3 compatibility-ci/scripts/check_report_coverage.py std \
+            --native-reports native-reports --wasm-reports wasm-reports >"$coverage_md"; then
+            coverage_ok=1
+          fi
           if [[ -d dev/stdreport ]]; then
             go run ./dev/stdreport \
               -native-reports native-reports \
@@ -569,8 +583,14 @@ jobs:
             } >"$report_md"
           fi
 
+          if [[ "$coverage_ok" != 1 ]]; then
+            sed -i 's/All standard library tests passed successfully\./Standard library compatibility coverage is incomplete./' "$report_md"
+          fi
+          cat "$coverage_md" "$report_md" >"$RUNNER_TEMP/std-report-with-coverage.md"
+          mv "$RUNNER_TEMP/std-report-with-coverage.md" "$report_md"
           cat "$report_md" >>"$GITHUB_STEP_SUMMARY"
           echo "STD_REPORT=$report_md" >>"$GITHUB_ENV"
+          echo "STD_COVERAGE_OK=$coverage_ok" >>"$GITHUB_ENV"
 
       - name: Preserve standard library summary report
         if: always()
@@ -605,6 +625,10 @@ jobs:
       - name: Verify standard library matrix result
         if: always()
         run: |
+          if [[ "$STD_COVERAGE_OK" != 1 ]]; then
+            echo "error: incomplete standard library reports" >&2
+            exit 1
+          fi
           if [[ "${{ needs.native.result }}" != "success" || "${{ needs.wasm-std.result }}" != "success" || "${{ needs.wasm-browser.result }}" != "success" || "${{ needs.wasm-sentinels.result }}" != "success" ]]; then
             echo "error: one or more standard library jobs did not succeed" >&2
             exit 1
