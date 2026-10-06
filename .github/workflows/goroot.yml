@@ -27,7 +27,7 @@ permissions:
 env:
   # Qualify this contribution against its paired compiler revision.
   # Other PRs and scheduled/manual runs without an override still use main.
-  LLGO_PR_TEST_REF: 7b032c61a52dbd7ab6d87df552c00f136b8c3cbb
+  LLGO_PR_TEST_REF: 02c52ea0ba602d4a304fa38e146927fabf461f7f
 
 concurrency:
   # Periodic compatibility runs are reports, so a later invocation must not
