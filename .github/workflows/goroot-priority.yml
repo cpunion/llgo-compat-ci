@@ -171,7 +171,7 @@ jobs:
           "$RUNNER_TEMP/core-tools/llgo" test -target=emscripten -c \
             -o "$RUNNER_TEMP/core-tools/workers.mjs" ./internal/build/testdata/wasm-test
           node targets/emscripten-runner.mjs "$RUNNER_TEMP/core-tools/workers.mjs" \
-            -test.v -test.count=10 -test.timeout=180s \
+            -test.v -test.count=30 -test.timeout=180s \
             -test.run='^(TestWorkerEmvalFinalizersStayInRealm|TestRetiredWorkerFiberReleasesFinalizer|TestWorkerTLSRoots)$'
       - name: Check runtime C build modes
         if: always() && matrix.platform == 'linux/amd64' && steps.build-tools.outcome == 'success'
@@ -210,3 +210,14 @@ jobs:
             ${{ runner.temp }}/core-work/llgo-goroot-*/wasm_fs.js
           retention-days: 3
           if-no-files-found: error
+
+  windows-gdb:
+    name: Windows ARM64 GDB setup
+    runs-on: windows-11-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.llgo_repository }}
+          ref: ${{ inputs.llgo_ref }}
+      - uses: ./.github/actions/setup-gdb

@@ -84,4 +84,7 @@ if __name__ == "__main__":
     matrix = {"goroot": native_matrix, "std": std_matrix, "embedded": embedded_matrix, "regressions": regression_matrix}[suite]()
     if suite == "regressions":
         matrix["include"] = [j for j in matrix["include"] if j["platform"] == "J32-Emscripten"]
+        for job in matrix["include"]:
+            job["case_paths"] = ("fixedbugs/issue22662.go",)
+            job["cases"] = "^fixedbugs/issue22662\\.go$"
     print(json.dumps(matrix, separators=(",", ":")))
