@@ -31,6 +31,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # PR checks qualify LLGo #2751; daily/manual runs keep their configured ref.
+  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && '7f0f1581e09370f1337c216ff49a5e3a9f7bcbf0' || 'main') }}
+
 jobs:
   goroot-matrix:
     name: GOROOT matrix
@@ -77,7 +81,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
 
       - name: Check out Intel LLVM setup
         if: matrix.platform == 'darwin/amd64'
@@ -450,7 +454,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
@@ -750,7 +754,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
 
       - name: Set up Go for the report generator
         uses: ./.github/actions/setup-go
