@@ -82,4 +82,9 @@ if __name__ == "__main__":
     parser.add_argument("suite", choices=("goroot", "std", "embedded", "regressions"))
     suite = parser.parse_args().suite
     matrix = {"goroot": native_matrix, "std": std_matrix, "embedded": embedded_matrix, "regressions": regression_matrix}[suite]()
+    if suite == "regressions":
+        matrix["include"] = [j for j in matrix["include"] if j["platform"] in ("J32-Emscripten", "J64-Emscripten")]
+        for job in matrix["include"]:
+            job["case_paths"] = ["clearfat.go"]
+            job["cases"] = "^clearfat\\.go$"
     print(json.dumps(matrix, separators=(",", ":")))
