@@ -4,12 +4,12 @@ on:
 permissions:
   contents: read
 jobs:
-  native:
-    runs-on: ${{ matrix.os }}
+  intel:
+    runs-on: macos-15-intel
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        go: ['1.26.7', '1.27.0']
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -20,52 +20,56 @@ jobs:
         with:
           llvm-version: 22
       - uses: ./.github/actions/setup-go
-      - name: Qualify recovered hardware-fault callers
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Build compiler and qualify original Intel cases
         shell: bash
         run: |
           go build -tags=llvm22,dev -o "$RUNNER_TEMP/llgo" ./cmd/llgo
           export LLGO_ROOT="$PWD"
-          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/bug347" "$(go env GOROOT)/test/fixedbugs/bug347.go"
-          "$RUNNER_TEMP/bug347" 2>&1 | tee "$RUNNER_TEMP/fault-stress.log"
-          test ! -s "$RUNNER_TEMP/fault-stress.log"
-          "$RUNNER_TEMP/llgo" test ./test/std/runtime -run 'TestCaller(DuringPanic|AfterHardware)'
-          "$RUNNER_TEMP/llgo" test ./test/std/sync
-      - name: Inspect inlining and fault-site unwinding
+          python3 - <<'PYTEST'
+          import os, subprocess, time
+          from pathlib import Path
+          tmp = Path(os.environ['RUNNER_TEMP'])
+          root = Path(subprocess.check_output(['go', 'env', 'GOROOT'], text=True).strip())
+          results = []
+          for name in ['inline_caller', 'inline_callers', 'abi/uglyfib']:
+              stem = name.rsplit('/', 1)[-1]
+              source = root / 'test' / (name + '.go')
+              for compiler in [str(tmp / 'llgo'), 'go']:
+                  target = tmp / (Path(compiler).name + '-' + stem)
+                  subprocess.run([compiler, 'build', '-o', str(target), str(source)], check=True)
+                  t = time.monotonic()
+                  with (tmp / (target.name + '-stress.log')).open('w') as f:
+                      try:
+                          r = subprocess.run([str(target)], stdout=f, stderr=subprocess.STDOUT, timeout=60)
+                          print(target.name, 'exit', r.returncode, 'seconds', round(time.monotonic()-t, 2), flush=True)
+                          results.append(r.returncode == 0)
+                      except subprocess.TimeoutExpired:
+                          print(target.name, 'TIMEOUT after 60s', flush=True)
+                          results.append(False)
+                  print((tmp / (target.name + '-stress.log')).read_text(), flush=True)
+          assert all(results), results
+          PYTEST
+      - name: Diagnose frame PCs and recursive allocation
         if: always()
         shell: bash
         run: |
           export LLGO_ROOT="$PWD"
-          llvm-nm "$RUNNER_TEMP/bug347" | grep 'main\.f' || true
-          LLGO_DYNUNWIND_DEBUG=1 LLGO_DYNUNWIND_NAMES=1 "$RUNNER_TEMP/bug347" 2>&1 | tee "$RUNNER_TEMP/fault-debug-stress.log"
           python3 - <<'PYPROBE'
           import os, subprocess
           from pathlib import Path
           root = Path(subprocess.check_output(['go', 'env', 'GOROOT'], text=True).strip())
-          text = (root / 'test/fixedbugs/bug347.go').read_text().replace('func f() {', '//go:noinline\nfunc f() {')
-          text = text.replace('pc, file, line, ok := runtime.Caller(i)', 'pc, file, line, ok := runtime.Caller(i)\nprintln("CALLER",i,pc,file,line,ok)\nif fn := runtime.FuncForPC(pc); fn != nil {println("FUNCTION",fn.Name())}')
-          (Path(os.environ['RUNNER_TEMP']) / 'bug347-noinline.go').write_text(text)
+          text = (root / 'test/inline_caller.go').read_text()
+          text = text.replace('if fn.Name() != expected[i].funcName {', 'println("FRAME", i, frame.pc, fn.Entry(), frame.file, frame.line, fn.Name()); if fn.Name() != expected[i].funcName {')
+          text = text.replace('panic(fmt.Sprintf("skip=%d expected function %s, got %s", i, expected[i].funcName, fn.Name()))', 'println(fmt.Sprintf("skip=%d expected function %s, got %s", i, expected[i].funcName, fn.Name()))')
+          (Path(os.environ['RUNNER_TEMP']) / 'inline-caller-probe.go').write_text(text)
           PYPROBE
-          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/bug347-noinline" "$RUNNER_TEMP/bug347-noinline.go"
-          LLGO_DYNUNWIND_DEBUG=1 LLGO_DYNUNWIND_NAMES=1 "$RUNNER_TEMP/bug347-noinline" 2>&1 | tee "$RUNNER_TEMP/fault-noinline-stress.log"
-          "$RUNNER_TEMP/llgo" test ./test/std/runtime -run 'TestCaller(DuringPanic|AfterHardware)'
-          "$RUNNER_TEMP/llgo" test ./test/std/sync
-      - name: Compile isolated RWMutex stress programs
-        if: always()
-        shell: bash
-        run: |
-          export LLGO_ROOT="$PWD"
-          source_file="$(go env GOROOT)/test/fixedbugs/issue79186.go"
-          go build -o "$RUNNER_TEMP/go-stress" "$source_file"
-          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/llgo-stress" "$source_file"
-      - name: Measure single-version stress with the unchanged one-minute limit
-        if: always()
-        shell: bash
-        run: |
-          set -o pipefail
-          /usr/bin/time -v timeout --kill-after=5s 60s "$RUNNER_TEMP/go-stress" 2>&1 | tee "$RUNNER_TEMP/go-stress.log"
-          /usr/bin/time -v timeout --kill-after=5s 60s "$RUNNER_TEMP/llgo-stress" 2>&1 | tee "$RUNNER_TEMP/llgo-stress.log"
+          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/inline-caller-probe" "$RUNNER_TEMP/inline-caller-probe.go"
+          LLGO_FUNCINFO_DEBUG=1 "$RUNNER_TEMP/inline-caller-probe" 2>&1 | tee "$RUNNER_TEMP/intel-frames-stress.log"
+          llvm-objdump --disassemble-symbols=main.f,main.g,main.h,main.k "$RUNNER_TEMP/llgo-uglyfib" | tee "$RUNNER_TEMP/intel-recursion-stress.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: stress-diagnosis-${{ matrix.os }}
+          name: intel-diagnosis-${{ matrix.go }}
           path: ${{ runner.temp }}/*-stress.log
