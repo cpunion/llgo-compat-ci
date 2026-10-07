@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: 75b6caa8fd872c44f6db9c4b56ec90c0fca927fb
+          ref: 88c7dc395b41bbf8bbcddd98e3911c7f381ca014
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
@@ -43,6 +43,7 @@ jobs:
           for name in ['inline_caller', 'inline_callers', 'abi/uglyfib']:
               stem = name.rsplit('/', 1)[-1]
               source = root / 'test' / (name + '.go')
+              outputs = []
               for compiler in [str(tmp / 'llgo'), 'go']:
                   target = tmp / (Path(compiler).name + '-' + stem)
                   subprocess.run([compiler, 'build', '-o', str(target), str(source)], check=True)
@@ -55,7 +56,10 @@ jobs:
                       except subprocess.TimeoutExpired:
                           print(target.name, 'TIMEOUT after 60s', flush=True)
                           results.append(False)
-                  print((tmp / (target.name + '-stress.log')).read_text(), flush=True)
+                  output = (tmp / (target.name + '-stress.log')).read_text()
+                  outputs.append(output)
+                  print(output, flush=True)
+              results.append(outputs[0] == outputs[1])
           assert all(results), results
           PYTEST
       - name: Diagnose frame PCs and recursive allocation
@@ -75,7 +79,7 @@ jobs:
           PYPROBE
           "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/inline-caller-probe" "$RUNNER_TEMP/inline-caller-probe.go"
           LLGO_FUNCINFO_DEBUG=1 "$RUNNER_TEMP/inline-caller-probe" 2>&1 | tee "$RUNNER_TEMP/intel-frames-stress.log"
-          llvm-objdump --disassemble-symbols=main.f,main.g,main.h,main.k "$RUNNER_TEMP/llgo-uglyfib" | tee "$RUNNER_TEMP/intel-recursion-stress.log"
+          llvm-objdump --disassemble-symbols=_main.f,_main.g,_main.h,_main.k "$RUNNER_TEMP/llgo-uglyfib" | tee "$RUNNER_TEMP/intel-recursion-stress.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
