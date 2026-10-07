@@ -1,4 +1,4 @@
-name: Native RWMutex stress diagnosis
+name: Native compatibility regression qualification
 on:
   workflow_dispatch:
 permissions:
@@ -15,15 +15,24 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: 7f0f1581e09370f1337c216ff49a5e3a9f7bcbf0
+          ref: d53179263692948a34174a719c956a9923ed9537
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
       - uses: ./.github/actions/setup-go
-      - name: Compile isolated RWMutex stress programs
+      - name: Qualify recovered hardware-fault callers
         shell: bash
         run: |
           go build -tags=llvm22,dev -o "$RUNNER_TEMP/llgo" ./cmd/llgo
+          export LLGO_ROOT="$PWD"
+          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/bug347" "$(go env GOROOT)/test/fixedbugs/bug347.go"
+          "$RUNNER_TEMP/bug347" 2>&1 | tee "$RUNNER_TEMP/fault-stress.log"
+          test ! -s "$RUNNER_TEMP/fault-stress.log"
+          "$RUNNER_TEMP/llgo" test ./test/std/runtime -run 'TestCaller(DuringPanic|AfterHardware)'
+          "$RUNNER_TEMP/llgo" test ./test/std/sync
+      - name: Compile isolated RWMutex stress programs
+        shell: bash
+        run: |
           export LLGO_ROOT="$PWD"
           source_file="$(go env GOROOT)/test/fixedbugs/issue79186.go"
           go build -o "$RUNNER_TEMP/go-stress" "$source_file"
