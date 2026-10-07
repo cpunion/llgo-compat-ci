@@ -35,7 +35,7 @@ concurrency:
 
 env:
   # PR checks qualify LLGo #2751; daily/manual runs keep their configured ref.
-  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && '2a41dbd94b9ca30b89a7b8d59bf0d593b0c712e7' || 'main') }}
+  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && 'fd8d595cf05e63e9d61ae401ba67949bae1975be' || 'main') }}
 
 jobs:
   core-regressions:
@@ -43,7 +43,7 @@ jobs:
     uses: ./.github/workflows/regressions.yml
     with:
       llgo_repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-      llgo_ref: ${{ inputs.llgo_ref || '2a41dbd94b9ca30b89a7b8d59bf0d593b0c712e7' }}
+      llgo_ref: ${{ inputs.llgo_ref || 'fd8d595cf05e63e9d61ae401ba67949bae1975be' }}
       wasmer_pr3: true
 
   goroot-matrix:
