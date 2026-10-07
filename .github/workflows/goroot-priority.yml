@@ -30,7 +30,27 @@ jobs:
           test ! -s "$RUNNER_TEMP/fault-stress.log"
           "$RUNNER_TEMP/llgo" test ./test/std/runtime -run 'TestCaller(DuringPanic|AfterHardware)'
           "$RUNNER_TEMP/llgo" test ./test/std/sync
+      - name: Inspect inlining and fault-site unwinding
+        if: always()
+        shell: bash
+        run: |
+          export LLGO_ROOT="$PWD"
+          llvm-nm "$RUNNER_TEMP/bug347" | grep 'main\.f' || true
+          LLGO_DYNUNWIND_DEBUG=1 LLGO_DYNUNWIND_NAMES=1 "$RUNNER_TEMP/bug347" 2>&1 | tee "$RUNNER_TEMP/fault-debug-stress.log"
+          python3 - <<'PYPROBE'
+          import os, subprocess
+          from pathlib import Path
+          root = Path(subprocess.check_output(['go', 'env', 'GOROOT'], text=True).strip())
+          text = (root / 'test/fixedbugs/bug347.go').read_text().replace('func f() {', '//go:noinline\nfunc f() {')
+          text = text.replace('pc, file, line, ok := runtime.Caller(i)', 'pc, file, line, ok := runtime.Caller(i)\nprintln("CALLER",i,pc,file,line,ok)\nif fn := runtime.FuncForPC(pc); fn != nil {println("FUNCTION",fn.Name())}')
+          (Path(os.environ['RUNNER_TEMP']) / 'bug347-noinline.go').write_text(text)
+          PYPROBE
+          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/bug347-noinline" "$RUNNER_TEMP/bug347-noinline.go"
+          LLGO_DYNUNWIND_DEBUG=1 LLGO_DYNUNWIND_NAMES=1 "$RUNNER_TEMP/bug347-noinline" 2>&1 | tee "$RUNNER_TEMP/fault-noinline-stress.log"
+          "$RUNNER_TEMP/llgo" test ./test/std/runtime -run 'TestCaller(DuringPanic|AfterHardware)'
+          "$RUNNER_TEMP/llgo" test ./test/std/sync
       - name: Compile isolated RWMutex stress programs
+        if: always()
         shell: bash
         run: |
           export LLGO_ROOT="$PWD"
@@ -38,6 +58,7 @@ jobs:
           go build -o "$RUNNER_TEMP/go-stress" "$source_file"
           "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/llgo-stress" "$source_file"
       - name: Measure single-version stress with the unchanged one-minute limit
+        if: always()
         shell: bash
         run: |
           set -o pipefail
