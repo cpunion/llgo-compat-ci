@@ -1,87 +1,171 @@
-name: Native compatibility regression qualification
+name: Compatibility regressions
+
 on:
+  workflow_call:
+    inputs:
+      llgo_repository:
+        type: string
+        default: xgo-dev/llgo
+      llgo_ref:
+        type: string
+        required: true
+      wasmer_pr3:
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      llgo_repository:
+        description: LLGo repository to test
+        type: string
+        default: xgo-dev/llgo
+      llgo_ref:
+        description: LLGo branch, tag, or commit
+        type: string
+        default: main
+      wasmer_pr3:
+        description: Use the qualified Wasmer PR 3 artifact
+        type: boolean
+        default: false
+
 permissions:
   contents: read
+  actions: read
+
 jobs:
-  intel:
-    runs-on: macos-15-intel
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: matrix
+        run: echo "matrix=$(python3 scripts/compatibility_matrix.py regressions)" >> "$GITHUB_OUTPUT"
+
+  regressions:
+    name: Core (${{ matrix.platform }}, Go ${{ matrix.go_version }})
+    needs: matrix
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        go: ['1.26.7', '1.27.0']
-    timeout-minutes: 30
+      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: cpunion/llgo
-          ref: 88c7dc395b41bbf8bbcddd98e3911c7f381ca014
+          repository: ${{ inputs.llgo_repository }}
+          ref: ${{ inputs.llgo_ref }}
+      - uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
+        if: matrix.platform == 'darwin/amd64'
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
-      - uses: ./.github/actions/setup-go
-      - name: Build with the repository Go toolchain
-        shell: bash
-        run: go build -tags=llvm22,dev -o "$RUNNER_TEMP/llgo" ./cmd/llgo
+          install-llvm: ${{ matrix.platform != 'darwin/amd64' }}
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
       - uses: ./.github/actions/setup-go
         with:
-          go-version: ${{ matrix.go }}
+          architecture: ${{ matrix.windows_arch == 'arm64' && 'arm64' || '' }}
+      - name: Build only the compiler and corpus runner
+        id: build-tools
+        shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/core-tools"
+          suffix=
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
+          go build -tags=llvm22,dev -o "$RUNNER_TEMP/core-tools/llgo$suffix" ./cmd/llgo
+          go test -c -o "$RUNNER_TEMP/core-tools/goroot-runner$suffix" ./test/goroot
+      - name: Resolve the target Go version
+        id: target-go
+        shell: bash
+        run: |
+          source dev/go_toolchain.sh
+          echo "version=$(llgo_resolve_go_version "$PWD" '${{ matrix.go_version }}')" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ steps.target-go.outputs.version }}
+          architecture: ${{ matrix.windows_arch == 'arm64' && 'arm64' || '' }}
           cache: false
-      - name: Qualify original Intel cases
-        shell: bash
-        run: |
-          export LLGO_ROOT="$PWD"
-          mkdir -p "$GOPATH/src/github.com/xgo-dev"
-          ln -s "$PWD" "$GOPATH/src/github.com/xgo-dev/llgo"
-          export GO111MODULE=off
-          python3 - <<'PYTEST'
-          import os, subprocess, time
-          from pathlib import Path
-          tmp = Path(os.environ['RUNNER_TEMP'])
-          root = Path(subprocess.check_output(['go', 'env', 'GOROOT'], text=True).strip())
-          results = []
-          for name in ['inline_caller', 'inline_callers', 'abi/uglyfib']:
-              stem = name.rsplit('/', 1)[-1]
-              source = root / 'test' / (name + '.go')
-              outputs = []
-              for compiler in [str(tmp / 'llgo'), 'go']:
-                  target = tmp / (Path(compiler).name + '-' + stem)
-                  subprocess.run([compiler, 'build', '-o', str(target), str(source)], check=True)
-                  t = time.monotonic()
-                  with (tmp / (target.name + '-stress.log')).open('w') as f:
-                      try:
-                          r = subprocess.run([str(target)], stdout=f, stderr=subprocess.STDOUT, timeout=60)
-                          print(target.name, 'exit', r.returncode, 'seconds', round(time.monotonic()-t, 2), flush=True)
-                          results.append(r.returncode == 0)
-                      except subprocess.TimeoutExpired:
-                          print(target.name, 'TIMEOUT after 60s', flush=True)
-                          results.append(False)
-                  output = (tmp / (target.name + '-stress.log')).read_text()
-                  outputs.append(output)
-                  print(output, flush=True)
-              results.append(outputs[0] == outputs[1])
-          assert all(results), results
-          PYTEST
-      - name: Diagnose frame PCs and recursive allocation
-        if: always()
-        shell: bash
-        run: |
-          export LLGO_ROOT="$PWD"
-          export GO111MODULE=off
-          python3 - <<'PYPROBE'
-          import os, subprocess
-          from pathlib import Path
-          root = Path(subprocess.check_output(['go', 'env', 'GOROOT'], text=True).strip())
-          text = (root / 'test/inline_caller.go').read_text()
-          text = text.replace('if fn.Name() != expected[i].funcName {', 'println("FRAME", i, frame.pc, fn.Entry(), frame.file, frame.line, fn.Name()); if fn.Name() != expected[i].funcName {')
-          text = text.replace('panic(fmt.Sprintf("skip=%d expected function %s, got %s", i, expected[i].funcName, fn.Name()))', 'println(fmt.Sprintf("skip=%d expected function %s, got %s", i, expected[i].funcName, fn.Name()))')
-          (Path(os.environ['RUNNER_TEMP']) / 'inline-caller-probe.go').write_text(text)
-          PYPROBE
-          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/inline-caller-probe" "$RUNNER_TEMP/inline-caller-probe.go"
-          LLGO_FUNCINFO_DEBUG=1 "$RUNNER_TEMP/inline-caller-probe" 2>&1 | tee "$RUNNER_TEMP/intel-frames-stress.log"
-          llvm-objdump --disassemble-symbols=_main.f,_main.g,_main.h,_main.k "$RUNNER_TEMP/llgo-uglyfib" | tee "$RUNNER_TEMP/intel-recursion-stress.log"
-      - uses: actions/upload-artifact@v7
-        if: always()
+      - uses: ./.github/actions/activate-windows-target
+        if: runner.os == 'Windows'
         with:
-          name: intel-diagnosis-${{ matrix.go }}
-          path: ${{ runner.temp }}/*-stress.log
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+      - uses: emscripten-core/setup-emsdk@v15
+        if: startsWith(matrix.wasm_profile, 'J')
+        with:
+          version: '6.0.8'
+      - uses: actions/setup-node@v7
+        if: startsWith(matrix.wasm_profile, 'J')
+        with:
+          node-version: '24'
+      - uses: ./.github/actions/setup-binaryen
+        if: startsWith(matrix.wasm_profile, 'J')
+      - name: Install Wasmer
+        if: matrix.wasm_profile == 'W32-WASI' && !inputs.wasmer_pr3
+        run: bash dev/install_wasmer.sh
+      - name: Install qualified Wasmer PR 3 artifact
+        if: matrix.wasm_profile == 'W32-WASI' && inputs.wasmer_pr3
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="$RUNNER_TEMP/wasmer-pr3"
+          gh run download 37578522115 --repo xgo-dev/wasmer --name wasmer-linux-amd64 --dir "$package"
+          (
+            cd "$package"
+            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            tar -xzf wasmer-linux-amd64.tar.gz
+            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+          )
+          chmod +x "$package/bin/wasmer"
+          echo "$package/bin" >> "$GITHUB_PATH"
+      - name: Run the selected regressions
+        id: regressions
+        shell: bash
+        env:
+          CASES: ${{ matrix.cases }}
+          WASM_PROFILE: ${{ matrix.wasm_profile }}
+          EXPECTED_CASES: ${{ join(matrix.case_paths, ',') }}
+          LLGO_STDIO_NOBUF: '1'
+        run: |
+          export LLGO_ROOT="$PWD"
+          suffix=
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
+          export LLGO_TEST_LLGO="$RUNNER_TEMP/core-tools/llgo$suffix"
+          if [[ "$RUNNER_OS" == Windows ]]; then LLGO_TEST_LLGO=$(cygpath -w "$LLGO_TEST_LLGO"); fi
+          target_goroot=$(go env GOROOT)
+          for name in $(compgen -e); do
+            case "$name" in GITHUB_*|ACTIONS_*) unset "$name" ;; esac
+          done
+          min_swap_free_mib=512
+          if [[ "$RUNNER_OS" == macOS ]]; then min_swap_free_mib=0; fi
+          (
+            cd test/goroot
+            "$RUNNER_TEMP/core-tools/goroot-runner$suffix" \
+              -test.run='^TestGoRootRunCases$' -test.count=1 -test.v -test.timeout=20m \
+              -goroot "$target_goroot" -directive-mode ci \
+              -case "$CASES" -wasm-profile "$WASM_PROFILE" -min-swap-free-mib="$min_swap_free_mib" \
+              2>&1 | tee "$RUNNER_TEMP/core-regressions.log"
+          )
+          python3 compatibility-ci/scripts/check_core_regressions.py \
+            "$RUNNER_TEMP/core-regressions.log" --expected "$EXPECTED_CASES"
+      - name: Check the embedded runtime build tags
+        if: always() && matrix.platform == 'linux/amd64' && steps.build-tools.outcome == 'success'
+        env:
+          LLGO_ROOT: ${{ github.workspace }}
+        run: |
+          "$RUNNER_TEMP/core-tools/llgo" build -target=esp32c3 \
+            -o "$RUNNER_TEMP/core-esp32c3.elf" ./test/buildcache
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.regressions.outcome != 'skipped'
+        with:
+          name: core-${{ matrix.artifact }}
+          path: ${{ runner.temp }}/core-regressions.log
+          if-no-files-found: error
