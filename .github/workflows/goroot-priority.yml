@@ -14,34 +14,43 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          repository: xgo-dev/llgo
-          ref: main
+          repository: cpunion/llgo
+          ref: f2337548d7f0ac134cbac0c9aaa50d3aec642d66
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
       - uses: ./.github/actions/setup-go
-      - name: Build and diagnose finalizer arguments
+      - name: Qualify captured closures and finalizers
         shell: bash
         env:
           GOFLAGS: -tags=llvm22
         run: |
           go build -tags=dev -o "$RUNNER_TEMP/llgo" ./cmd/llgo
+          go test -c -o "$RUNNER_TEMP/goroot-runner" ./test/goroot
           export LLGO_ROOT="$PWD"
-          sudo apt-get install -y gdb
-          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/tinyfin" "$(go env GOROOT)/test/tinyfin.go"
-          gdb --batch "$RUNNER_TEMP/tinyfin" \
-            -ex 'set pagination off' -ex 'break main.main.func1' -ex run \
-            -ex 'info args' -ex 'info registers' -ex bt -ex 'disassemble /r' \
-            > "$RUNNER_TEMP/gdb.log" 2>&1
-          cat "$RUNNER_TEMP/gdb.log"
-          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/uintptr" "$(go env GOROOT)/test/uintptrescapes3.go"
-          gdb --batch "$RUNNER_TEMP/uintptr" \
-            -ex 'set pagination off' -ex 'break main.main.func1' -ex run \
-            -ex 'info args' -ex 'info registers' -ex bt -ex 'disassemble /r' \
-            > "$RUNNER_TEMP/gdb-uintptr.log" 2>&1
-          cat "$RUNNER_TEMP/gdb-uintptr.log"
+          "$RUNNER_TEMP/llgo" test -run '^TestReflectCallCapturedClosure$' ./test/go
+          cd test/goroot
+          "$RUNNER_TEMP/goroot-runner" -test.v -test.run '^TestGoRootRunCases$' \
+            -goroot "$(go env GOROOT)" -llgo "$RUNNER_TEMP/llgo" \
+            -directive-mode ci -case '^(tinyfin|uintptrescapes3)\.go$'
+      - name: Inspect recovered hardware-fault frames
+        shell: bash
+        run: |
+          python3 - <<'PYPROBE'
+          import os, subprocess
+          from pathlib import Path
+          root = Path(subprocess.check_output(['go', 'env', 'GOROOT'], text=True).strip())
+          source = (root / 'test/fixedbugs/bug347.go').read_text()
+          source = source.replace('pc, file, line, ok := runtime.Caller(i)',
+              'pc, file, line, ok := runtime.Caller(i)\n' +
+              '\t\t\tprintln("CALLER", i, pc, file, line, ok)\n' +
+              '\t\t\tif fn := runtime.FuncForPC(pc); fn != nil { println("FUNCTION", fn.Name()) }')
+          (Path(os.environ['RUNNER_TEMP']) / 'bug347-probe.go').write_text(source)
+          PYPROBE
+          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/bug347-probe" "$RUNNER_TEMP/bug347-probe.go"
+          "$RUNNER_TEMP/bug347-probe" 2>&1 | tee "$RUNNER_TEMP/callers.log"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: diagnosis-${{ matrix.os }}
-          path: ${{ runner.temp }}/gdb*.log
+          path: ${{ runner.temp }}/callers.log
