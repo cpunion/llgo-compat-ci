@@ -142,6 +142,10 @@ jobs:
           fi
           export LLGO_TEST_LLGO="$RUNNER_TEMP/core-tools/llgo$suffix"
           if [[ "$RUNNER_OS" == Windows ]]; then LLGO_TEST_LLGO=$(cygpath -w "$LLGO_TEST_LLGO"); fi
+          work="$RUNNER_TEMP/core-work"
+          mkdir -p "$work"
+          if [[ "$RUNNER_OS" == Windows ]]; then work=$(cygpath -w "$work"); fi
+          export TMPDIR="$work" TEMP="$work" TMP="$work"
           target_goroot=$(go env GOROOT)
           for name in $(compgen -e); do
             case "$name" in GITHUB_*|ACTIONS_*) unset "$name" ;; esac
@@ -153,7 +157,7 @@ jobs:
             "$RUNNER_TEMP/core-tools/goroot-runner$suffix" \
               -test.run='^TestGoRootRunCases$' -test.count=1 -test.v -test.timeout=20m \
               -goroot "$target_goroot" -directive-mode ci \
-              -case "$CASES" -wasm-profile "$WASM_PROFILE" -min-swap-free-mib="$min_swap_free_mib" \
+              -case "$CASES" -wasm-profile "$WASM_PROFILE" -min-swap-free-mib="$min_swap_free_mib" -keepwork \
               2>&1 | tee "$RUNNER_TEMP/core-regressions.log"
           )
           python3 compatibility-ci/scripts/check_core_regressions.py \
@@ -170,4 +174,11 @@ jobs:
         with:
           name: core-${{ matrix.artifact }}
           path: ${{ runner.temp }}/core-regressions.log
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: failure() && steps.regressions.outcome == 'failure'
+        with:
+          name: core-programs-${{ matrix.artifact }}
+          path: ${{ runner.temp }}/core-work/llgo-goroot-*
+          retention-days: 3
           if-no-files-found: error
