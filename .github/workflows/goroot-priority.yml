@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: 469e8db17feda572f64356cd2b1eff691bcedf74
+          ref: 75b6caa8fd872c44f6db9c4b56ec90c0fca927fb
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
