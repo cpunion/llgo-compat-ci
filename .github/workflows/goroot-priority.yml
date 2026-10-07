@@ -20,13 +20,20 @@ jobs:
         with:
           llvm-version: 22
       - uses: ./.github/actions/setup-go
+      - name: Build with the repository Go toolchain
+        shell: bash
+        run: go build -tags=llvm22,dev -o "$RUNNER_TEMP/llgo" ./cmd/llgo
+      - uses: ./.github/actions/setup-go
         with:
           go-version: ${{ matrix.go }}
-      - name: Build compiler and qualify original Intel cases
+          cache: false
+      - name: Qualify original Intel cases
         shell: bash
         run: |
-          go build -tags=llvm22,dev -o "$RUNNER_TEMP/llgo" ./cmd/llgo
           export LLGO_ROOT="$PWD"
+          mkdir -p "$GOPATH/src/github.com/xgo-dev"
+          ln -s "$PWD" "$GOPATH/src/github.com/xgo-dev/llgo"
+          export GO111MODULE=off
           python3 - <<'PYTEST'
           import os, subprocess, time
           from pathlib import Path
@@ -56,6 +63,7 @@ jobs:
         shell: bash
         run: |
           export LLGO_ROOT="$PWD"
+          export GO111MODULE=off
           python3 - <<'PYPROBE'
           import os, subprocess
           from pathlib import Path
