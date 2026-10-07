@@ -162,6 +162,16 @@ jobs:
           )
           python3 compatibility-ci/scripts/check_core_regressions.py \
             "$RUNNER_TEMP/core-regressions.log" --expected "$EXPECTED_CASES"
+      - name: Check worker GC and finalizers
+        if: always() && matrix.platform == 'J32-Emscripten' && steps.build-tools.outcome == 'success'
+        env:
+          LLGO_ROOT: ${{ github.workspace }}
+          LLGO_WASM_WORKERS: '2'
+        run: |
+          "$RUNNER_TEMP/core-tools/llgo" test -target=emscripten \
+            -v -count=10 -timeout=180s \
+            -run='^(TestWorkerEmvalFinalizersStayInRealm|TestRetiredWorkerFiberReleasesFinalizer|TestWorkerTLSRoots)$' \
+            ./internal/build/testdata/wasm-test
       - name: Check runtime C build modes
         if: always() && matrix.platform == 'linux/amd64' && steps.build-tools.outcome == 'success'
         env:

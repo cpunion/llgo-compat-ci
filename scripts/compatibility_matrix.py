@@ -83,5 +83,5 @@ if __name__ == "__main__":
     suite = parser.parse_args().suite
     matrix = {"goroot": native_matrix, "std": std_matrix, "embedded": embedded_matrix, "regressions": regression_matrix}[suite]()
     if suite == "regressions":
-        matrix["include"] = [j for j in matrix["include"] if j["platform"] == "W32-WASI"]
+        matrix["include"] = [j for j in matrix["include"] if j["platform"] == "J32-Emscripten"]
     print(json.dumps(matrix, separators=(",", ":")))
