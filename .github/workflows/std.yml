@@ -65,6 +65,7 @@ jobs:
         with:
           path: compatibility-ci
       - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
         if: matrix.platform == 'darwin/amd64'
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
@@ -84,6 +85,10 @@ jobs:
 
       - name: Build LLGo and test tools
         shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
         run: |
           dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
           echo "$RUNNER_TEMP/llgo-bin" >> "$GITHUB_PATH"

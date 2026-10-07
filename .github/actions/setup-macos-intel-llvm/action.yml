@@ -1,6 +1,14 @@
 name: Setup Intel macOS LLVM
 description: Use the LLVM 22 toolchain shipped in LLGo's Intel macOS releases
 
+outputs:
+  go-flags:
+    value: ${{ steps.configure.outputs.go-flags }}
+  cgo-cppflags:
+    value: ${{ steps.configure.outputs.cgo-cppflags }}
+  cgo-ldflags:
+    value: ${{ steps.configure.outputs.cgo-ldflags }}
+
 runs:
   using: composite
   steps:
@@ -23,6 +31,7 @@ runs:
         mkdir -p "$LLGO_INTEL_LLVM_ROOT"
         tar -xJf "$archive" -C "$LLGO_INTEL_LLVM_ROOT" --strip-components=1
     - name: Configure and verify the native toolchain
+      id: configure
       shell: bash
       env:
         LLGO_INTEL_LLVM_ROOT: ${{ runner.tool_cache }}/llgo-intel-llvm/22.1.4_20260912
@@ -39,8 +48,12 @@ runs:
         {
           echo "SDKROOT=$macos_sdk"
           echo "LLVM_CONFIG=$llvm_bin/llvm-config"
-          echo "GOFLAGS=${GOFLAGS:-} -tags=byollvm"
-          echo "CGO_CPPFLAGS=${CGO_CPPFLAGS:-} -I$LLGO_INTEL_LLVM_ROOT/include -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
-          echo "CGO_LDFLAGS=${CGO_LDFLAGS:-} -L$LLGO_INTEL_LLVM_ROOT/lib -lLLVM-22 -lz -lm -Wl,-rpath,$LLGO_INTEL_LLVM_ROOT/lib"
         } >> "$GITHUB_ENV"
+        # Scope LLVM CGo flags to host-tool builds; guest programs and their
+        # official Go baselines must not link the compiler's LLVM library.
+        {
+          echo "go-flags=${GOFLAGS:-} -tags=byollvm"
+          echo "cgo-cppflags=${CGO_CPPFLAGS:-} -I$LLGO_INTEL_LLVM_ROOT/include -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
+          echo "cgo-ldflags=${CGO_LDFLAGS:-} -L$LLGO_INTEL_LLVM_ROOT/lib -lLLVM-22 -lz -lm -Wl,-rpath,$LLGO_INTEL_LLVM_ROOT/lib"
+        } >> "$GITHUB_OUTPUT"
         echo "$llvm_bin" >> "$GITHUB_PATH"

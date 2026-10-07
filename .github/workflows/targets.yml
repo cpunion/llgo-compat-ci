@@ -63,6 +63,7 @@ jobs:
         with:
           path: compatibility-ci
       - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
         if: matrix.platform == 'darwin/amd64'
       - uses: ./.github/actions/setup-deps
         with:
@@ -76,6 +77,10 @@ jobs:
           architecture: ${{ matrix.windows_arch == 'arm64' && 'arm64' || startsWith(matrix.os, 'windows') && 'x64' || '' }}
       - name: Build compiler
         shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
         run: |
           go install ./cmd/llgo
           echo "LLGO_ROOT=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
