@@ -29,10 +29,11 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   # PR checks qualify LLGo #2751; daily/manual runs keep their configured ref.
-  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && '7f0f1581e09370f1337c216ff49a5e3a9f7bcbf0' || 'main') }}
+  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && '7830c4797f3c44a47d269fc557cc535c285a440d' || 'main') }}
 
 jobs:
   std-matrix:
@@ -257,6 +258,23 @@ jobs:
       - name: Install Wasmer for W32
         if: ${{ matrix.profile == 'W32-WASI' }}
         run: bash dev/install_wasmer.sh
+      - name: Use qualified Wasmer PR 3 for this PR
+        if: github.event_name == 'pull_request' && matrix.profile == 'W32-WASI'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="$RUNNER_TEMP/wasmer-pr3"
+          gh run download 37578522115 --repo xgo-dev/wasmer \
+            --name wasmer-linux-amd64 --dir "$package"
+          (
+            cd "$package"
+            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            tar -xzf wasmer-linux-amd64.tar.gz
+            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+          )
+          chmod +x "$package/bin/wasmer"
+          "$package/bin/wasmer" --version -v
+          echo "$package/bin" >> "$GITHUB_PATH"
       - name: Record Wasmer revision and backends
         if: ${{ matrix.profile == 'W32-WASI' }}
         run: wasmer --version -v
@@ -387,6 +405,23 @@ jobs:
           wasmer-cache-mode: readwrite
       - name: Install Wasmer for W32
         run: bash dev/install_wasmer.sh
+      - name: Use qualified Wasmer PR 3 for this PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="$RUNNER_TEMP/wasmer-pr3"
+          gh run download 37578522115 --repo xgo-dev/wasmer \
+            --name wasmer-linux-amd64 --dir "$package"
+          (
+            cd "$package"
+            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            tar -xzf wasmer-linux-amd64.tar.gz
+            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+          )
+          chmod +x "$package/bin/wasmer"
+          "$package/bin/wasmer" --version -v
+          echo "$package/bin" >> "$GITHUB_PATH"
       - name: Record Wasmer revision and backends
         run: wasmer --version -v
       - name: Build LLGo and host-side GOROOT runner

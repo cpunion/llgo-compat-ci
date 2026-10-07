@@ -30,7 +30,7 @@ concurrency:
 
 env:
   # PR checks qualify LLGo #2751; daily/manual runs keep their configured ref.
-  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && '7f0f1581e09370f1337c216ff49a5e3a9f7bcbf0' || 'main') }}
+  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && '7830c4797f3c44a47d269fc557cc535c285a440d' || 'main') }}
 
 jobs:
   matrix:

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/goroot.yml
+      - .github/workflows/regressions.yml
       - .github/actions/setup-macos-intel-llvm/**
       - scripts/**
   workflow_dispatch:
@@ -24,6 +25,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   # Preserve scheduled/manual reports, but give the latest PR revision the
@@ -33,9 +35,17 @@ concurrency:
 
 env:
   # PR checks qualify LLGo #2751; daily/manual runs keep their configured ref.
-  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && '7f0f1581e09370f1337c216ff49a5e3a9f7bcbf0' || 'main') }}
+  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && '7830c4797f3c44a47d269fc557cc535c285a440d' || 'main') }}
 
 jobs:
+  core-regressions:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/regressions.yml
+    with:
+      llgo_repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+      llgo_ref: ${{ inputs.llgo_ref || '7830c4797f3c44a47d269fc557cc535c285a440d' }}
+      wasmer_pr3: true
+
   goroot-matrix:
     name: GOROOT matrix
     runs-on: ubuntu-24.04
@@ -52,7 +62,8 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   goroot:
-    needs: goroot-matrix
+    needs: [goroot-matrix, core-regressions]
+    if: always() && needs.goroot-matrix.result == 'success' && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success')
     name: GOROOT (${{ matrix.os }}${{ startsWith(matrix.os, 'windows') && format(', {0}, {1}', matrix.windows_abi, matrix.windows_arch) || '' }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/${{ matrix.shard-total }})
     timeout-minutes: 180
     outputs:
@@ -420,7 +431,8 @@ jobs:
           retention-days: 1
 
   goroot-wasm:
-    needs: goroot-matrix
+    needs: [goroot-matrix, core-regressions]
+    if: always() && needs.goroot-matrix.result == 'success' && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success')
     name: GOROOT (wasm, ${{ matrix.wasm_profile }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/16)
     timeout-minutes: 180
     runs-on: ubuntu-24.04
@@ -485,6 +497,23 @@ jobs:
       - name: Install Wasmer for W32
         if: matrix.wasm_profile == 'W32-WASI'
         run: bash dev/install_wasmer.sh
+      - name: Use qualified Wasmer PR 3 for this PR
+        if: github.event_name == 'pull_request' && matrix.wasm_profile == 'W32-WASI'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="$RUNNER_TEMP/wasmer-pr3"
+          gh run download 37578522115 --repo xgo-dev/wasmer \
+            --name wasmer-linux-amd64 --dir "$package"
+          (
+            cd "$package"
+            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            tar -xzf wasmer-linux-amd64.tar.gz
+            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+          )
+          chmod +x "$package/bin/wasmer"
+          "$package/bin/wasmer" --version -v
+          echo "$package/bin" >> "$GITHUB_PATH"
 
       - name: Set up Go for building LLGo and the runner
         uses: ./.github/actions/setup-go
@@ -744,8 +773,8 @@ jobs:
 
   goroot-summary:
     name: GOROOT summary
-    if: always()
-    needs: [goroot, goroot-wasm]
+    if: always() && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success')
+    needs: [core-regressions, goroot, goroot-wasm]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
