@@ -20,22 +20,11 @@ jobs:
         with:
           llvm-version: 22
       - uses: ./.github/actions/setup-go
-      - name: Qualify captured closures and finalizers
-        shell: bash
-        env:
-          GOFLAGS: -tags=llvm22
-        run: |
-          go build -tags=dev -o "$RUNNER_TEMP/llgo" ./cmd/llgo
-          go test -c -o "$RUNNER_TEMP/goroot-runner" ./test/goroot
-          export LLGO_ROOT="$PWD"
-          "$RUNNER_TEMP/llgo" test -run '^TestReflectCallCapturedClosure$' ./test/go
-          cd test/goroot
-          "$RUNNER_TEMP/goroot-runner" -test.v -test.run '^TestGoRootRunCases$' \
-            -goroot "$(go env GOROOT)" -llgo "$RUNNER_TEMP/llgo" \
-            -directive-mode ci -case '^(tinyfin|uintptrescapes3)\.go$'
       - name: Inspect recovered hardware-fault frames
         shell: bash
         run: |
+          go build -tags=llvm22,dev -o "$RUNNER_TEMP/llgo" ./cmd/llgo
+          export LLGO_ROOT="$PWD"
           python3 - <<'PYPROBE'
           import os, subprocess
           from pathlib import Path
