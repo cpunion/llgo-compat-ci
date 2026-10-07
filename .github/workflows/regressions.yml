@@ -162,6 +162,17 @@ jobs:
           )
           python3 compatibility-ci/scripts/check_core_regressions.py \
             "$RUNNER_TEMP/core-regressions.log" --expected "$EXPECTED_CASES"
+      - name: Check runtime C build modes
+        if: always() && matrix.platform == 'linux/amd64' && steps.build-tools.outcome == 'success'
+        env:
+          LLGO_ROOT: ${{ github.workspace }}
+        run: |
+          modfile="$RUNNER_TEMP/core-runtime.mod"
+          cp .github/test-go.mod "$modfile"
+          cp .github/test-go.sum "${modfile%.mod}.sum"
+          go mod edit -modfile="$modfile" -replace="github.com/xgo-dev/llgo/runtime=$PWD/runtime"
+          LLGO="$RUNNER_TEMP/core-tools/llgo" LLGO_TEST_MODFILE="$modfile" \
+            bash dev/test_std_buildmodes.sh ./test/std/runtime
       - name: Check the embedded runtime build tags
         if: always() && matrix.platform == 'linux/amd64' && steps.build-tools.outcome == 'success'
         env:
@@ -179,6 +190,12 @@ jobs:
         if: failure() && steps.regressions.outcome == 'failure'
         with:
           name: core-programs-${{ matrix.artifact }}
-          path: ${{ runner.temp }}/core-work/llgo-goroot-*
+          path: |
+            ${{ runner.temp }}/core-work/llgo-goroot-*/*.wasm
+            ${{ runner.temp }}/core-work/llgo-goroot-*/*.mjs
+            ${{ runner.temp }}/core-work/llgo-goroot-*/*.out
+            ${{ runner.temp }}/core-work/llgo-goroot-*/go-work/*.go
+            ${{ runner.temp }}/core-work/llgo-goroot-*/*generated-work/*.go
+            ${{ runner.temp }}/core-work/llgo-goroot-*/wasm_fs.js
           retention-days: 3
           if-no-files-found: error
