@@ -83,8 +83,7 @@ if __name__ == "__main__":
     suite = parser.parse_args().suite
     matrix = {"goroot": native_matrix, "std": std_matrix, "embedded": embedded_matrix, "regressions": regression_matrix}[suite]()
     if suite == "regressions":
-        matrix["include"] = [j for j in matrix["include"] if j["platform"] in ("J32-Emscripten", "J64-Emscripten")]
-        for job in matrix["include"]:
-            job["case_paths"] = ["clearfat.go"]
-            job["cases"] = "^clearfat\\.go$"
+        matrix["include"] = [j for j in matrix["include"] if j["platform"] in
+                            ("linux/amd64", "J32-Emscripten", "J64-Emscripten", "W32-WASI")
+                            or j["platform"] == "darwin/amd64" and j["go_version"] == "1.26"]
     print(json.dumps(matrix, separators=(",", ":")))
