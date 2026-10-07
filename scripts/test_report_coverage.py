@@ -9,7 +9,9 @@ from check_report_coverage import (
     check_goroot,
     check_partition,
     check_std,
+    check_targets,
     std_native_reports,
+    target_reports,
 )
 
 
@@ -64,7 +66,7 @@ class CoverageTests(unittest.TestCase):
     def test_issue35_partial_matrix_cannot_pass(self):
         rows = []
         for version in self.versions:
-            rows += [["js/wasm", version, str(index), "1", "1", "1", "0", "0", "16"] for index in range(16)]
+            rows += [["J32-GoJS", version, str(index), "1", "1", "1", "0", "0", "16"] for index in range(16)]
             rows += [["windows-msvc/arm64", version, str(index), "1", "1", "1", "0", "0", "64"] for index in (29, 61)]
         errors = self.check_rows(rows)
         self.assertTrue(any("darwin/arm64" in error for error in errors))
@@ -74,6 +76,13 @@ class CoverageTests(unittest.TestCase):
         rows = self.goroot_rows()
         rows[0][4] = "0"
         self.assertTrue(any("incomplete case results" in error for error in self.check_rows(rows)))
+
+    def test_goroot_requires_release_hosts_and_wasi(self):
+        missing = {"darwin/amd64", "linux/arm64", "W32-WASI"}
+        errors = self.check_rows([r for r in self.goroot_rows() if r[0] not in missing])
+        self.assertEqual(6, len(errors))
+        for platform in missing:
+            self.assertTrue(any(platform in e for e in errors))
 
     def test_goroot_unknown_selection_and_missing_denominator_fail(self):
         rows = self.goroot_rows()
@@ -86,7 +95,7 @@ class CoverageTests(unittest.TestCase):
     def test_std_full_report_set(self):
         errors, description = check_std(*self.make_std_reports())
         self.assertEqual([], errors)
-        self.assertEqual("native reports 11/11, Wasm reports 14/14", description)
+        self.assertEqual("native reports 13/13, Wasm reports 14/14", description)
 
     def test_std_missing_native_and_entire_wasi_profile(self):
         native, wasm = self.make_std_reports()
@@ -95,7 +104,7 @@ class CoverageTests(unittest.TestCase):
             path.unlink()
         errors, description = check_std(native, wasm)
         self.assertEqual(6, len(errors))
-        self.assertIn("native reports 10/11, Wasm reports 9/14", description)
+        self.assertIn("native reports 12/13, Wasm reports 9/14", description)
         self.assertTrue(any("W32-WASI" in error for error in errors))
 
     def test_std_duplicate_and_wrong_shard_total_fail(self):
@@ -116,6 +125,40 @@ class CoverageTests(unittest.TestCase):
         next(wasm.rglob("acceptance.json")).write_text("invalid json")
         errors, _ = check_std(native, wasm)
         self.assertEqual(2, len(errors))
+
+    def make_target_reports(self):
+        reports = self.root / "targets"
+        for pos, (suite, profile, mode) in enumerate(sorted(target_reports())):
+            path = reports / str(pos) / "target-report.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(dict(suite=suite, profile=profile, mode=mode, result="success")))
+        return reports
+
+    def test_target_profile_reports_cover_all_hosts_and_fixtures(self):
+        errors, description = check_targets(self.make_target_reports())
+        self.assertEqual([], errors)
+        self.assertIn("target reports 24/24", description)
+
+    def test_target_profile_missing_and_duplicate_reports_fail(self):
+        reports = self.make_target_reports()
+        paths = sorted(reports.rglob("target-report.json"))
+        paths[0].write_text(paths[1].read_text())
+        errors, _ = check_targets(reports)
+        self.assertTrue(any("duplicate target" in e for e in errors))
+        self.assertTrue(any("missing target" in e for e in errors))
+
+    def test_target_profile_failure_and_wrong_execution_mode_fail(self):
+        reports = self.make_target_reports()
+        path = next(reports.rglob("target-report.json"))
+        data = json.loads(path.read_text())
+        data["result"] = "failure"
+        path.write_text(json.dumps(data))
+        self.assertTrue(any("job result is failure" in e for e in check_targets(reports)[0]))
+        data["mode"] = "physical-board"
+        path.write_text(json.dumps(data))
+        errors, _ = check_targets(reports)
+        self.assertTrue(any("unexpected target" in e for e in errors))
+        self.assertTrue(any("missing target" in e for e in errors))
 
 
 if __name__ == "__main__":

@@ -11,7 +11,9 @@ from pathlib import Path
 
 NATIVE_PLATFORMS = (
     "darwin/arm64",
+    "darwin/amd64",
     "linux/amd64",
+    "linux/arm64",
     "windows-msvc/amd64",
     "windows-msvc/arm64",
     "windows-msvc/386",
@@ -19,13 +21,13 @@ NATIVE_PLATFORMS = (
     "windows-mingw/arm64",
     "windows-mingw/386",
 )
-GOROOT_PLATFORMS = (*NATIVE_PLATFORMS, "js/wasm")
 WASM_SHARDS = {
     "J32-GoJS": 3,
     "J32-Emscripten": 3,
     "J64-Emscripten": 3,
     "W32-WASI": 5,
 }
+GOROOT_PLATFORMS = (*NATIVE_PLATFORMS, *WASM_SHARDS)
 
 
 def check_partition(shards):
@@ -119,6 +121,40 @@ def check_std(native_dir, wasm_dir):
     return errors, f"native reports {len(native)}/{len(expected_native)}, Wasm reports {len(wasm)}/{len(expected_wasm)}"
 
 
+def target_reports():
+    expected = {("target-build", fixture, "compile") for fixture in ("empty", "defer")}
+    expected.update(("embedded-debug", os, backend)
+                    for os in ("ubuntu-24.04", "macos-15", "windows-2022")
+                    for backend in ("gdb", "lldb"))
+    expected.update(("windows-cross", f"{os}/windows-mingw/{arch}", "compile")
+                    for os in ("ubuntu-24.04", "macos-latest")
+                    for arch in ("amd64", "arm64", "386"))
+    for platform in NATIVE_PLATFORMS:
+        mode = "build-only" if platform in ("windows-msvc/arm64", "windows-mingw/arm64") else "emulator"
+        expected.add(("embedded", platform, mode))
+    return expected
+
+
+def check_targets(reports_dir):
+    expected, received, errors = target_reports(), set(), []
+    for path in sorted(Path(reports_dir).rglob("target-report.json")):
+        try:
+            report = json.loads(path.read_text())
+            key = (report["suite"], report["profile"], report["mode"])
+            if key not in expected:
+                raise ValueError(f"unexpected target report {key}")
+            if key in received:
+                raise ValueError(f"duplicate target report {key}")
+            received.add(key)
+            if report["result"] != "success":
+                raise ValueError(f"{key}: job result is {report['result']}")
+        except (ValueError, KeyError, TypeError) as error:
+            errors.append(f"{path.parent.name}/{path.name}: {error}")
+    for key in sorted(expected - received):
+        errors.append(f"missing target report: {' · '.join(key)}")
+    return errors, f"target reports {len(received)}/{len(expected)} (8 emulator hosts, 2 build-only hosts, 2 target-build fixtures, 6 debugger profiles, 6 Windows GNU cross profiles)"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="suite", required=True)
@@ -128,14 +164,18 @@ def main():
     std = subparsers.add_parser("std")
     std.add_argument("--native-reports", required=True)
     std.add_argument("--wasm-reports", required=True)
+    targets = subparsers.add_parser("targets")
+    targets.add_argument("--reports", required=True)
     args = parser.parse_args()
     if args.suite == "goroot":
         versions = args.versions.split(",")
         if len(versions) != 2 or len(set(versions)) != 2:
             parser.error("GOROOT requires two distinct Go versions")
         errors, description = check_goroot(args.summary, versions)
-    else:
+    elif args.suite == "std":
         errors, description = check_std(args.native_reports, args.wasm_reports)
+    else:
+        errors, description = check_targets(args.reports)
     print(f"Coverage: {'❌ incomplete' if errors else '✅ complete'} ({description}).")
     print()
     if errors:

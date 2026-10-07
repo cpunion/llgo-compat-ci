@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/goroot.yml
+      - .github/actions/setup-macos-intel-llvm/**
       - scripts/**
   workflow_dispatch:
     inputs:
@@ -31,7 +32,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  goroot-matrix:
+    name: GOROOT matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify matrix and report coverage regressions
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Generate native matrix
+        id: matrix
+        run: |
+          matrix=$(python3 scripts/compatibility_matrix.py goroot)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   goroot:
+    needs: goroot-matrix
     name: GOROOT (${{ matrix.os }}${{ startsWith(matrix.os, 'windows') && format(', {0}, {1}', matrix.windows_abi, matrix.windows_arch) || '' }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/${{ matrix.shard-total }})
     timeout-minutes: 180
     outputs:
@@ -45,246 +62,7 @@ jobs:
       LLGO_GOROOT_SHARD_TOTAL: ${{ matrix.shard-total }}
     strategy:
       fail-fast: false
-      matrix:
-        # GOROOT is the compiler's primary compatibility suite. Always cover
-        # the two most recent Go releases; LLGo and this runner are still built
-        # once per job with the current toolchain from .go-version.
-        os: [macos-latest, ubuntu-latest, windows-2022, windows-11-arm]
-        windows_abi: [msvc, mingw]
-        windows_arch: [amd64, arm64, "386"]
-        # Eight native shards keep paired Go 1.26/1.27 jobs near the per-job
-        # latency target without returning to a version-expanded job matrix.
-        shard-index: ["0", "1", "2", "3", "4", "5", "6", "7"]
-        shard-total: ["8"]
-        exclude:
-          - os: macos-latest
-            windows_abi: mingw
-          - os: ubuntu-latest
-            windows_abi: mingw
-          - os: macos-latest
-            windows_arch: arm64
-          - os: macos-latest
-            windows_arch: "386"
-          - os: ubuntu-latest
-            windows_arch: arm64
-          - os: ubuntu-latest
-            windows_arch: "386"
-          - os: windows-2022
-            windows_arch: arm64
-          - os: windows-11-arm
-            windows_arch: amd64
-          - os: windows-11-arm
-            windows_arch: "386"
-          # The paired MSVC/386 shard 1/8 outlived its hosted runner.
-          - os: windows-2022
-            windows_abi: msvc
-            windows_arch: "386"
-            shard-index: "1"
-            shard-total: "8"
-          # These Windows ARM shards have repeatedly lost their hosted runner.
-          # Split only the affected shards below.
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "0"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "1"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "5"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "6"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "0"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "4"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "6"
-            shard-total: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "7"
-            shard-total: "8"
-        include:
-          # These entries exactly partition the excluded 1/8 shards and their
-          # paired Go-version shards. Only subshards that still reach the
-          # hosted-runner limit are split beyond 1/16.
-          - os: windows-2022
-            windows_abi: msvc
-            windows_arch: "386"
-            shard-index: "1"
-            shard-total: "16"
-            paired-shard-index: "5"
-          - os: windows-2022
-            windows_abi: msvc
-            windows_arch: "386"
-            shard-index: "9"
-            shard-total: "16"
-            paired-shard-index: "13"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "0"
-            shard-total: "16"
-            paired-shard-index: "4"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "8"
-            shard-total: "16"
-            paired-shard-index: "12"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "1"
-            shard-total: "64"
-            paired-shard-index: "5"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "33"
-            shard-total: "64"
-            paired-shard-index: "37"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "17"
-            shard-total: "64"
-            paired-shard-index: "21"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "49"
-            shard-total: "64"
-            paired-shard-index: "53"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "9"
-            shard-total: "16"
-            paired-shard-index: "13"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "5"
-            shard-total: "32"
-            paired-shard-index: "1"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "21"
-            shard-total: "32"
-            paired-shard-index: "17"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "13"
-            shard-total: "32"
-            paired-shard-index: "9"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "29"
-            shard-total: "64"
-            paired-shard-index: "25"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "61"
-            shard-total: "64"
-            paired-shard-index: "57"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "6"
-            shard-total: "16"
-            paired-shard-index: "2"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "14"
-            shard-total: "32"
-            paired-shard-index: "10"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "30"
-            shard-total: "32"
-            paired-shard-index: "26"
-          # Preserve the paired Go 1.26/1.27 partition of MinGW ARM64 while
-          # halving the four shards that lost hosted runners on recent runs.
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "0"
-            shard-total: "16"
-            paired-shard-index: "4"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "8"
-            shard-total: "32"
-            paired-shard-index: "12"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "24"
-            shard-total: "32"
-            paired-shard-index: "28"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "4"
-            shard-total: "16"
-            paired-shard-index: "0"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "12"
-            shard-total: "16"
-            paired-shard-index: "8"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "6"
-            shard-total: "16"
-            paired-shard-index: "2"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "14"
-            shard-total: "16"
-            paired-shard-index: "10"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "7"
-            shard-total: "16"
-            paired-shard-index: "3"
-          - os: windows-11-arm
-            windows_abi: mingw
-            windows_arch: arm64
-            shard-index: "15"
-            shard-total: "16"
-            paired-shard-index: "11"
+      matrix: ${{ fromJSON(needs.goroot-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Record expected matrix reports
@@ -301,10 +79,19 @@ jobs:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
           ref: ${{ inputs.llgo_ref || 'main' }}
 
+      - name: Check out Intel LLVM setup
+        if: matrix.platform == 'darwin/amd64'
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        if: matrix.platform == 'darwin/amd64'
+
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
+          install-llvm: ${{ matrix.platform != 'darwin/amd64' }}
           windows-abi: ${{ matrix.windows_abi }}
           windows-arch: ${{ matrix.windows_arch }}
 
@@ -410,6 +197,21 @@ jobs:
         with:
           windows-abi: ${{ matrix.windows_abi }}
           windows-arch: ${{ matrix.windows_arch }}
+
+      - name: Verify native target identity
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          target_os=$(go env GOOS)
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            target_os="windows-${LLGO_WINDOWS_ABI}"
+          fi
+          actual="$target_os/$(go env GOARCH)"
+          if [[ "$actual" != "$TARGET_PLATFORM" ]]; then
+            echo "error: target is $actual, expected $TARGET_PLATFORM" >&2
+            exit 1
+          fi
 
       - name: Show toolchain versions
         shell: bash
@@ -531,9 +333,7 @@ jobs:
         if: always()
         shell: bash
         env:
-          MATRIX_OS: ${{ matrix.os }}
-          WINDOWS_ABI: ${{ matrix.windows_abi }}
-          WINDOWS_ARCH: ${{ matrix.windows_arch }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
           SHARD_INDEX: ${{ matrix.shard-index }}
           GO126_VERSION: ${{ steps.go126.outputs.version }}
           GO127_VERSION: ${{ steps.go127.outputs.version }}
@@ -541,14 +341,7 @@ jobs:
           report_dir="$RUNNER_TEMP/goroot-report"
           mkdir -p "$report_dir" "$RUNNER_TEMP/goroot-logs"
 
-          platform=linux/amd64
-          if [[ "$MATRIX_OS" == "macos-latest" ]]; then
-            platform=darwin/arm64
-          elif [[ "$MATRIX_OS" == "windows-2022" ]]; then
-            platform="windows-${WINDOWS_ABI}/${WINDOWS_ARCH}"
-          elif [[ "$MATRIX_OS" == "windows-11-arm" ]]; then
-            platform="windows-${WINDOWS_ABI}/${WINDOWS_ARCH}"
-          fi
+          platform="$TARGET_PLATFORM"
 
           summarize_log() {
             local go_version=$1
@@ -618,6 +411,7 @@ jobs:
           retention-days: 1
 
   goroot-wasm:
+    needs: goroot-matrix
     name: GOROOT (wasm, ${{ matrix.wasm_profile }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/16)
     timeout-minutes: 180
     runs-on: ubuntu-24.04
@@ -635,7 +429,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        wasm_profile: [J32-GoJS]
+        wasm_profile: [J32-GoJS, J32-Emscripten, J64-Emscripten, W32-WASI]
         # Wasm cases are substantially slower than native cases. These shards
         # run on Ubuntu capacity and keep each runner near the 25-minute target
         # without consuming additional macOS or Windows runners.
@@ -670,6 +464,18 @@ jobs:
 
       - name: Set up Binaryen
         uses: ./.github/actions/setup-binaryen
+
+      - name: Restore Wasmer cache
+        if: matrix.wasm_profile == 'W32-WASI'
+        uses: ./.github/actions/setup-llgo-cache
+        with:
+          build-cache-mode: 'off'
+          crosscompile-cache-mode: 'off'
+          wasmer-cache-mode: readwrite
+
+      - name: Install Wasmer for W32
+        if: matrix.wasm_profile == 'W32-WASI'
+        run: bash dev/install_wasmer.sh
 
       - name: Set up Go for building LLGo and the runner
         uses: ./.github/actions/setup-go
@@ -860,7 +666,7 @@ jobs:
           report_dir="$RUNNER_TEMP/goroot-report"
           mkdir -p "$report_dir" "$RUNNER_TEMP/goroot-logs"
 
-          platform=js/wasm
+          platform="${{ matrix.wasm_profile }}"
 
           summarize_log() {
             local go_version=$1
@@ -948,9 +754,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: compatibility-ci
-
-      - name: Verify coverage checker regressions
-        run: python3 -m unittest discover -s compatibility-ci/scripts -p 'test_*.py'
 
       - name: Download shard statistics
         continue-on-error: true
