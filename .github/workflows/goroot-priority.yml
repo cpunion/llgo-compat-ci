@@ -133,11 +133,13 @@ jobs:
           CASES: ${{ matrix.cases }}
           WASM_PROFILE: ${{ matrix.wasm_profile }}
           EXPECTED_CASES: ${{ join(matrix.case_paths, ',') }}
-          LLGO_STDIO_NOBUF: '1'
         run: |
           export LLGO_ROOT="$PWD"
           suffix=
-          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            suffix=.exe
+            export LLGO_STDIO_NOBUF=1
+          fi
           export LLGO_TEST_LLGO="$RUNNER_TEMP/core-tools/llgo$suffix"
           if [[ "$RUNNER_OS" == Windows ]]; then LLGO_TEST_LLGO=$(cygpath -w "$LLGO_TEST_LLGO"); fi
           target_goroot=$(go env GOROOT)
