@@ -1,0 +1,47 @@
+name: Native compatibility diagnosis
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: xgo-dev/llgo
+          ref: main
+      - uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+      - uses: ./.github/actions/setup-go
+      - name: Build and diagnose finalizer arguments
+        shell: bash
+        env:
+          GOFLAGS: -tags=llvm22
+        run: |
+          go build -tags=dev -o "$RUNNER_TEMP/llgo" ./cmd/llgo
+          export LLGO_ROOT="$PWD"
+          sudo apt-get install -y gdb
+          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/tinyfin" "$(go env GOROOT)/test/tinyfin.go"
+          gdb --batch "$RUNNER_TEMP/tinyfin" \
+            -ex 'set pagination off' -ex 'break main.main.func1' -ex run \
+            -ex 'info args' -ex 'info registers' -ex bt -ex 'disassemble /r' \
+            > "$RUNNER_TEMP/gdb.log" 2>&1
+          cat "$RUNNER_TEMP/gdb.log"
+          "$RUNNER_TEMP/llgo" build -o "$RUNNER_TEMP/uintptr" "$(go env GOROOT)/test/uintptrescapes3.go"
+          gdb --batch "$RUNNER_TEMP/uintptr" \
+            -ex 'set pagination off' -ex 'break main.main.func1' -ex run \
+            -ex 'info args' -ex 'info registers' -ex bt -ex 'disassemble /r' \
+            > "$RUNNER_TEMP/gdb-uintptr.log" 2>&1
+          cat "$RUNNER_TEMP/gdb-uintptr.log"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: diagnosis-${{ matrix.os }}
+          path: ${{ runner.temp }}/gdb*.log
