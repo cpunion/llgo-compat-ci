@@ -1,0 +1,100 @@
+name: Compare PR 2751 finalizers with main
+
+on:
+  push:
+    branches: [codex/pr2751-failure-ab-20261008]
+
+permissions:
+  contents: read
+
+jobs:
+  finalizers:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.26', '1.27']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: xgo-dev/llgo
+          ref: b86d349178d610e6b15e95c2a5fdfcb130d09fa1
+          path: baseline
+      - uses: actions/checkout@v7
+        with:
+          repository: xgo-dev/llgo
+          ref: 705a49ef652a7453b1b95d5fb567e0517deef4c9
+          path: head
+      - uses: ./.github/actions/setup-macos-intel-llvm
+        id: llvm
+      - uses: ./head/.github/actions/setup-deps
+        with:
+          llvm-version: 22
+          install-llvm: 'false'
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.0'
+          cache: false
+      - name: Build both compiler revisions
+        env:
+          GOFLAGS: ${{ steps.llvm.outputs.go-flags }}
+          CGO_CPPFLAGS: ${{ steps.llvm.outputs.cgo-cppflags }}
+          CGO_LDFLAGS: ${{ steps.llvm.outputs.cgo-ldflags }}
+        run: |
+          for revision in baseline head; do
+            (cd "$revision" && go build -tags=llvm22,dev -o "$RUNNER_TEMP/llgo-$revision" ./cmd/llgo)
+          done
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '${{ matrix.go }}.x'
+          cache: false
+      - name: Compare 200 executions per revision
+        run: |
+          python3 - <<'PY'
+          import collections
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          root = Path.cwd()
+          tmp = Path(os.environ['RUNNER_TEMP'])
+          goroot = Path(subprocess.check_output(['go', 'env', 'GOROOT'], text=True).strip())
+          report = {}
+          for revision in ['baseline', 'head']:
+              work = tmp / ('finalizers-' + revision)
+              work.mkdir()
+              (work / 'main.go').write_bytes((goroot / 'test/fixedbugs/issue5493.go').read_bytes())
+              (work / 'go.mod').write_text('module example.com/finalizerprobe\n\ngo 1.26\n')
+              env = dict(os.environ, LLGO_ROOT=str(root / revision), GOROOT=str(goroot),
+                         XDG_CACHE_HOME=str(work / 'cache'), GOTOOLCHAIN='local')
+              executable = work / 'issue5493'
+              build = subprocess.run([str(tmp / ('llgo-' + revision)), 'build', '-o', str(executable), 'main.go'],
+                                     cwd=work, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+              (work / 'build.log').write_text(build.stdout)
+              build.check_returncode()
+              counts = collections.Counter()
+              failures = []
+              for iteration in range(200):
+                  result = subprocess.run([str(executable)], cwd=work, env=env, text=True,
+                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10)
+                  counts[str(result.returncode)] += 1
+                  if result.returncode:
+                      failures.append(f'Execution {iteration + 1}\n{result.stdout}')
+              (work / 'failures.log').write_text('\n'.join(failures))
+              report[revision] = dict(counts)
+              print(revision, dict(counts), flush=True)
+          (tmp / 'finalizer-comparison.json').write_text(json.dumps(report, indent=2))
+          if any(any(code != '0' for code in counts) for counts in report.values()):
+              raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: finalizer-comparison-go${{ matrix.go }}
+          path: |
+            ${{ runner.temp }}/finalizer-comparison.json
+            ${{ runner.temp }}/finalizers-*/build.log
+            ${{ runner.temp }}/finalizers-*/failures.log
