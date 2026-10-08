@@ -35,7 +35,7 @@ concurrency:
 
 env:
   # PR checks qualify LLGo #2751; daily/manual runs keep their configured ref.
-  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && 'a9bfaf09a400d4dea63e5fcd83498cb9f6eb4f24' || 'main') }}
+  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && 'ff1d63dcffa5c2b5e06a3391fc9ea4954ee164a3' || 'main') }}
 
 jobs:
   core-regressions:
@@ -43,7 +43,7 @@ jobs:
     uses: ./.github/workflows/regressions.yml
     with:
       llgo_repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-      llgo_ref: ${{ inputs.llgo_ref || 'a9bfaf09a400d4dea63e5fcd83498cb9f6eb4f24' }}
+      llgo_ref: ${{ inputs.llgo_ref || 'ff1d63dcffa5c2b5e06a3391fc9ea4954ee164a3' }}
       wasmer_pr3: true
 
   goroot-matrix:
@@ -641,30 +641,26 @@ jobs:
             (
               cd test/goroot
               max_rss_mib=4096
-              build_timeout=3m
-              if [[ "${{ matrix.wasm_profile }}" == "J32-GoJS" ]]; then
-                # Case-to-shard placement changes with the Go version and the
-                # active directive set. Detect rangegen.go from the actual
-                # selected case list instead of assuming a fixed shard.
-                case_list="$RUNNER_TEMP/goroot-cases-go${version}.txt"
-                if env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
-                  "$LLGO_GOROOT_RUNNER" \
-                  -test.run='^TestGoRootRunCases$' -test.count=1 \
-                  -goroot "$target_goroot" \
-                  -directive-mode ci \
-                  -wasm-profile "${{ matrix.wasm_profile }}" \
-                  -list-case-paths \
-                  -shard-index "$target_shard" \
-                  -shard-total "$LLGO_GOROOT_SHARD_TOTAL" \
-                  >"$case_list" 2>&1 && grep -Eq '(^|[[:space:]])rangegen\.go$' "$case_list"; then
-                  # rangegen.go's Emscripten compiler process peaks around
-                  # 7 GiB and needs more than the default per-case timeout.
-                  # Keep both allowances limited to the selected case.
-                  max_rss_mib=8192
-                  build_timeout=15m
-                fi
-                rm -f "$case_list"
+              # Case-to-shard placement changes with the Go version and the
+              # active directive set. Detect rangegen.go from the actual
+              # selected case list instead of assuming a fixed shard.
+              case_list="$RUNNER_TEMP/goroot-cases-go${version}.txt"
+              if env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
+                "$LLGO_GOROOT_RUNNER" \
+                -test.run='^TestGoRootRunCases$' -test.count=1 \
+                -goroot "$target_goroot" \
+                -directive-mode ci \
+                -wasm-profile "${{ matrix.wasm_profile }}" \
+                -list-case-paths \
+                -shard-index "$target_shard" \
+                -shard-total "$LLGO_GOROOT_SHARD_TOTAL" \
+                >"$case_list" 2>&1 && grep -Eq '(^|[[:space:]])rangegen\.go$' "$case_list"; then
+                # rangegen.go's Wasm compiler process peaks around
+                # 7 GiB. Raise the RSS cap only for shards containing it;
+                # per-case build timeouts come from llgo's test metadata.
+                max_rss_mib=8192
               fi
+              rm -f "$case_list"
               env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
                 "$LLGO_GOROOT_RUNNER" \
                 -test.run='^TestGoRootRunCases$' -test.count=1 \
@@ -672,7 +668,6 @@ jobs:
                 -goroot "$target_goroot" \
                 -directive-mode ci \
                 -wasm-profile "${{ matrix.wasm_profile }}" \
-                -build-timeout "$build_timeout" \
                 -max-rss-mib "$max_rss_mib" \
                 -progress 60s \
                 -shard-index "$target_shard" \

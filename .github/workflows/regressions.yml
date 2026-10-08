@@ -152,12 +152,16 @@ jobs:
           done
           min_swap_free_mib=512
           if [[ "$RUNNER_OS" == macOS ]]; then min_swap_free_mib=0; fi
+          max_rss_mib=4096
+          # Wasm lanes include rangegen's large generated compiler test.
+          if [[ -n "$WASM_PROFILE" ]]; then max_rss_mib=8192; fi
           (
             cd test/goroot
             "$RUNNER_TEMP/core-tools/goroot-runner$suffix" \
               -test.run='^TestGoRootRunCases$' -test.count=1 -test.v -test.timeout=20m \
               -goroot "$target_goroot" -directive-mode ci \
               -case "$CASES" -wasm-profile "$WASM_PROFILE" -min-swap-free-mib="$min_swap_free_mib" -keepwork \
+              -max-rss-mib="$max_rss_mib" \
               2>&1 | tee "$RUNNER_TEMP/core-regressions.log"
           )
           python3 compatibility-ci/scripts/check_core_regressions.py \

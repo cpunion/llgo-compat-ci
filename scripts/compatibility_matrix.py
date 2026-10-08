@@ -38,7 +38,7 @@ def regression_matrix():
     native_cases = {
         "linux/amd64": ("fixedbugs/bug347.go", "fixedbugs/issue79186.go"),
         "linux/arm64": ("fixedbugs/bug347.go", "fixedbugs/issue79186.go", "tinyfin.go", "uintptrescapes3.go"),
-        "darwin/amd64": ("inline_caller.go", "inline_callers.go", "abi/uglyfib.go"),
+        "darwin/amd64": ("inline_caller.go", "inline_callers.go", "abi/uglyfib.go", "rangegen.go"),
         "windows-msvc/arm64": ("env.go", "inline_caller.go", "tinyfin.go", "uintptrescapes3.go", "fixedbugs/issue79186.go"),
         "windows-mingw/arm64": ("env.go", "inline_caller.go", "tinyfin.go", "uintptrescapes3.go", "fixedbugs/issue79186.go"),
     }
@@ -46,8 +46,8 @@ def regression_matrix():
             for host in host_jobs() if host["platform"] in native_cases]
     intel = next(job for job in jobs if job["platform"] == "darwin/amd64")
     jobs.append(dict(intel, go_version="1.26"))
-    js_cases = ("clearfat.go", "winbatch.go", "fixedbugs/issue30041.go", "fixedbugs/issue22662.go", "fixedbugs/issue5856.go")
-    wasi_cases = ("env.go", "gc2.go", "uintptrescapes3.go", "fixedbugs/issue11256.go", "fixedbugs/issue22662.go", "fixedbugs/issue5856.go", "fixedbugs/issue79186.go")
+    js_cases = ("clearfat.go", "winbatch.go", "fixedbugs/issue79186.go", "fixedbugs/issue22662.go", "fixedbugs/issue5856.go", "rangegen.go", "fixedbugs/issue38093.go")
+    wasi_cases = ("winbatch.go", "fixedbugs/issue34395.go", "fixedbugs/issue31419.go", "fixedbugs/issue14646.go", "fixedbugs/issue4618.go", "rangegen.go", "fixedbugs/issue78081.go")
     jobs.extend(dict(platform=profile, os="ubuntu-24.04", windows_abi="", windows_arch="", go_version="1.27",
                      wasm_profile=profile, case_paths=wasi_cases if profile == "W32-WASI" else js_cases)
                 for profile in ("J32-GoJS", "J32-Emscripten", "J64-Emscripten", "W32-WASI"))
