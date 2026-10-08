@@ -63,7 +63,7 @@ jobs:
 
   goroot:
     needs: [goroot-matrix, core-regressions]
-    if: always() && needs.goroot-matrix.result == 'success' && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success')
+    if: ${{ !cancelled() && needs.goroot-matrix.result == 'success' && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success') }}
     name: GOROOT (${{ matrix.os }}${{ startsWith(matrix.os, 'windows') && format(', {0}, {1}', matrix.windows_abi, matrix.windows_arch) || '' }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/${{ matrix.shard-total }})
     timeout-minutes: 180
     outputs:
@@ -432,7 +432,7 @@ jobs:
 
   goroot-wasm:
     needs: [goroot-matrix, core-regressions]
-    if: always() && needs.goroot-matrix.result == 'success' && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success')
+    if: ${{ !cancelled() && needs.goroot-matrix.result == 'success' && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success') }}
     name: GOROOT (wasm, ${{ matrix.wasm_profile }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/16)
     timeout-minutes: 180
     runs-on: ubuntu-24.04
@@ -768,7 +768,7 @@ jobs:
 
   goroot-summary:
     name: GOROOT summary
-    if: always() && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success')
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success') }}
     needs: [core-regressions, goroot, goroot-wasm]
     runs-on: ubuntu-24.04
     permissions:
