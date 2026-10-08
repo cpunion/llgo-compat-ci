@@ -153,8 +153,8 @@ jobs:
           min_swap_free_mib=512
           if [[ "$RUNNER_OS" == macOS ]]; then min_swap_free_mib=0; fi
           max_rss_mib=4096
-          # Wasm lanes include rangegen's large generated compiler test.
-          if [[ -n "$WASM_PROFILE" ]]; then max_rss_mib=8192; fi
+          # Generated rangegen builds exceed 4 GiB on Intel macOS and Wasm.
+          if [[ ",$EXPECTED_CASES," == *,rangegen.go,* ]]; then max_rss_mib=8192; fi
           (
             cd test/goroot
             "$RUNNER_TEMP/core-tools/goroot-runner$suffix" \

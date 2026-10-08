@@ -290,6 +290,7 @@ jobs:
                 -goroot "$target_goroot" \
                 -directive-mode ci \
                 -min-swap-free-mib "$min_swap_free_mib" \
+                -max-rss-mib "$max_rss_mib" \
                 -progress 60s \
                 -shard-index "$target_shard" \
                 -shard-total "$LLGO_GOROOT_SHARD_TOTAL"
@@ -301,13 +302,18 @@ jobs:
 
           status=0
           serial_versions=0
-          # Keep the million-call reflection stress loop isolated from its
-          # paired compiler. The 64-bit rangegen builds also peak above 3 GiB
-          # apiece. Find these cases in the actual platform/version corpus.
+          max_rss_mib=4096
+          # Isolate large generated builds and Windows reflection stress from
+          # their paired compiler. Intel macOS rangegen also exceeds 4 GiB.
+          serial_cases=
           if [[ "$RUNNER_OS" == "Windows" ]] && {
             [[ "${{ matrix.windows_arch }}" == "amd64" ]] || [[ "${{ matrix.windows_arch }}" == "arm64" ]]
           }; then
             serial_cases='(^|[[:space:]])(rangegen\.go|fixedbugs/issue39541\.go)$'
+          elif [[ "${{ matrix.platform }}" == "darwin/amd64" ]]; then
+            serial_cases='(^|[[:space:]])rangegen\.go$'
+          fi
+          if [[ -n "$serial_cases" ]]; then
             for selection in "${{ steps.go126.outputs.version }}:$shard_index" "${{ steps.go127.outputs.version }}:$paired_shard_index"; do
               version=${selection%:*}
               target_shard=${selection##*:}
@@ -325,6 +331,7 @@ jobs:
               if grep -Eq "$serial_cases" "$case_list"; then
                 echo "Serializing Go versions for resource-heavy cases in Go $version shard $target_shard/$LLGO_GOROOT_SHARD_TOTAL"
                 serial_versions=1
+                if [[ "${{ matrix.platform }}" == "darwin/amd64" ]]; then max_rss_mib=8192; fi
               fi
               rm -f "$case_list"
             done
