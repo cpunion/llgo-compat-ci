@@ -29,8 +29,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # PR checks qualify LLGo #2751; daily/manual runs keep their configured ref.
-  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && '705a49ef652a7453b1b95d5fb567e0517deef4c9' || 'main') }}
+  # PR checks qualify LLGo #2764; daily/manual runs keep their configured ref.
+  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && '9162eadc5742603e0f17d7c0c327b5585a4987bf' || 'main') }}
 
 jobs:
   matrix:
