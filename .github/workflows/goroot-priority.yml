@@ -1,0 +1,716 @@
+# Temporary fork-only qualification of the three failures from PR 37.
+# The STD J64 shard is re-run directly on the contribution workflow.
+name: GOROOT historical failure qualification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+env:
+  LLGO_REF: dd08de227cdd1ac08abde24b6476b155e51dc951
+jobs:
+  goroot:
+    name: GOROOT (${{ matrix.os }}${{ startsWith(matrix.os, 'windows') && format(', {0}, {1}', matrix.windows_abi, matrix.windows_arch) || '' }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/${{ matrix.shard-total }})
+    timeout-minutes: 180
+    outputs:
+      expected-reports: ${{ steps.report-count.outputs.count }}
+    env:
+      GOPROXY: https://proxy.golang.org,direct
+      LLGO_GOROOT_HEARTBEAT_SECONDS: "60"
+      # Leave thirty minutes for setup plus timeout diagnostics and artifacts.
+      LLGO_GOROOT_TEST_TIMEOUT: "150m"
+      LLGO_GOROOT_VERBOSE: "1"
+      LLGO_GOROOT_SHARD_TOTAL: ${{ matrix.shard-total }}
+    strategy:
+      fail-fast: false
+      matrix: {"include": [{"platform": "windows-mingw/386", "os": "windows-2022", "windows_abi": "mingw", "windows_arch": "386", "shard-index": "1", "shard-total": "8", "paired-shard-index": "5"}]}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Record expected matrix reports
+        id: report-count
+        shell: bash
+        env:
+          MATRIX_JOB_TOTAL: ${{ strategy.job-total }}
+        # Each configured job reports Go 1.26 and Go 1.27, even when it runs
+        # selected subshards of a larger corpus partition.
+        run: echo "count=$((MATRIX_JOB_TOTAL * 2))" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: xgo-dev/llgo
+          ref: ${{ env.LLGO_REF }}
+
+      - name: Check out Intel LLVM setup
+        if: matrix.platform == 'darwin/amd64'
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
+        if: matrix.platform == 'darwin/amd64'
+
+      - name: Install dependencies
+        uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+          install-llvm: ${{ matrix.platform != 'darwin/amd64' }}
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+
+      - name: Set up Go for building LLGo and the runner
+        uses: ./.github/actions/setup-go
+        with:
+          architecture: ${{ matrix.os == 'windows-11-arm' && 'arm64' || startsWith(matrix.os, 'windows') && 'x64' || '' }}
+
+      - name: Build LLGo and the GOROOT runner
+        id: build-tools
+        shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
+        run: |
+          LLGO_BUILD_GOROOT_RUNNER=1 dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
+
+          build_version="$(go env GOVERSION)"
+          build_version="${build_version#go}"
+          echo "go-version=$build_version" >> "$GITHUB_OUTPUT"
+          echo "goroot=$(go env GOROOT)" >> "$GITHUB_OUTPUT"
+          echo "LLGO_BUILD_GO_VERSION=$build_version" >> "$GITHUB_ENV"
+
+          tool_suffix=
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            tool_suffix=.exe
+          fi
+          runner="$RUNNER_TEMP/llgo-bin/goroot-runner${tool_suffix}"
+          llgo="$RUNNER_TEMP/llgo-bin/llgo${tool_suffix}"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            # The shell launches the runner, while the Go runner launches
+            # llgo through the native Windows process API.
+            llgo="$(cygpath -w "$llgo")"
+          fi
+          echo "LLGO_GOROOT_RUNNER=$runner" >> "$GITHUB_ENV"
+          echo "LLGO_TEST_LLGO=$llgo" >> "$GITHUB_ENV"
+
+      - name: Resolve target Go versions
+        id: target-go
+        shell: bash
+        run: |
+          source dev/go_toolchain.sh
+          echo "go126=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)" >> "$GITHUB_OUTPUT"
+          echo "go127=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)" >> "$GITHUB_OUTPUT"
+
+      # The toolchain module downloaded through GOTOOLCHAIN omits GOROOT/test.
+      # Install the complete distribution after building LLGo and the runner,
+      # so those binaries always use .go-version while the corpus can vary.
+      - name: Set up target Go 1.26
+        if: steps.target-go.outputs.go126 != steps.build-tools.outputs.go-version
+        uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ steps.target-go.outputs.go126 }}
+          architecture: ${{ matrix.os == 'windows-11-arm' && 'arm64' || startsWith(matrix.os, 'windows') && 'x64' || '' }}
+          cache: false
+
+      - name: Select Go 1.26 GOROOT
+        id: go126
+        shell: bash
+        env:
+          BUILD_GOROOT: ${{ steps.build-tools.outputs.goroot }}
+          BUILD_VERSION: ${{ steps.build-tools.outputs.go-version }}
+          TARGET_VERSION: ${{ steps.target-go.outputs.go126 }}
+        run: |
+          target_goroot="$(go env GOROOT)"
+          if [[ "$TARGET_VERSION" == "$BUILD_VERSION" ]]; then
+            target_goroot="$BUILD_GOROOT"
+          fi
+          if [[ ! -d "$target_goroot/test" ]]; then
+            echo "Target Go distribution does not contain GOROOT/test: $target_goroot" >&2
+            exit 1
+          fi
+          echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "goroot=$target_goroot" >> "$GITHUB_OUTPUT"
+
+      - name: Set up target Go 1.27
+        if: steps.target-go.outputs.go127 != steps.build-tools.outputs.go-version
+        uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ steps.target-go.outputs.go127 }}
+          architecture: ${{ matrix.os == 'windows-11-arm' && 'arm64' || startsWith(matrix.os, 'windows') && 'x64' || '' }}
+          cache: false
+
+      - name: Select Go 1.27 GOROOT
+        id: go127
+        shell: bash
+        env:
+          BUILD_GOROOT: ${{ steps.build-tools.outputs.goroot }}
+          BUILD_VERSION: ${{ steps.build-tools.outputs.go-version }}
+          TARGET_VERSION: ${{ steps.target-go.outputs.go127 }}
+        run: |
+          target_goroot="$(go env GOROOT)"
+          if [[ "$TARGET_VERSION" == "$BUILD_VERSION" ]]; then
+            target_goroot="$BUILD_GOROOT"
+          fi
+          if [[ ! -d "$target_goroot/test" ]]; then
+            echo "Target Go distribution does not contain GOROOT/test: $target_goroot" >&2
+            exit 1
+          fi
+          echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "goroot=$target_goroot" >> "$GITHUB_OUTPUT"
+
+      - name: Activate native Windows target
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/activate-windows-target
+        with:
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+
+      - name: Verify native target identity
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          target_os=$(go env GOOS)
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            target_os="windows-${LLGO_WINDOWS_ABI}"
+          fi
+          actual="$target_os/$(go env GOARCH)"
+          if [[ "$actual" != "$TARGET_PLATFORM" ]]; then
+            echo "error: target is $actual, expected $TARGET_PLATFORM" >&2
+            exit 1
+          fi
+
+      - name: Show toolchain versions
+        shell: bash
+        env:
+          GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
+          GO127_GOROOT: ${{ steps.go127.outputs.goroot }}
+        run: |
+          echo "LLGo build toolchain: $LLGO_BUILD_GO_VERSION"
+          for target_goroot in "$GO126_GOROOT" "$GO127_GOROOT"; do
+            target_go="$target_goroot/bin/go"
+            if [[ "$RUNNER_OS" == Windows ]]; then
+              target_go+=.exe
+            fi
+            "$target_go" version
+          done
+          go env GOPROXY GOMODCACHE
+          clang --version
+
+      - name: Run GOROOT runner
+        shell: bash
+        env:
+          GOTOOLCHAIN: local
+          GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
+          GO127_GOROOT: ${{ steps.go127.outputs.goroot }}
+          PAIRED_SHARD_INDEX: ${{ matrix.paired-shard-index }}
+        run: |
+          min_swap_free_mib=512
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            # macOS manages swap dynamically; a low instantaneous free value
+            # does not mean the runner cannot make forward progress.
+            min_swap_free_mib=0
+          fi
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            # Generated programs write into pipes and terminate through
+            # ExitProcess, which does not run CRT stream teardown.
+            export LLGO_STDIO_NOBUF=1
+          fi
+          mkdir -p "$RUNNER_TEMP/goroot-logs" "$RUNNER_TEMP/goroot-cache"
+          shard_index=${{ matrix.shard-index }}
+          paired_shard_index=${PAIRED_SHARD_INDEX:-$(((shard_index + LLGO_GOROOT_SHARD_TOTAL / 2) % LLGO_GOROOT_SHARD_TOTAL))}
+
+          run_goroot() {
+            local target_goroot=$1
+            local version=$2
+            local target_shard=$3
+            local log="$RUNNER_TEMP/goroot-logs/go${version}.log"
+            local cache="$RUNNER_TEMP/goroot-cache/go${version}"
+            mkdir -p "$cache"
+            set +e
+            (
+              cd test/goroot
+              env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
+                "$LLGO_GOROOT_RUNNER" \
+                -test.run='^TestGoRootRunCases$' -test.count=1 \
+                -test.timeout="$LLGO_GOROOT_TEST_TIMEOUT" -test.v \
+                -goroot "$target_goroot" \
+                -directive-mode ci \
+                -min-swap-free-mib "$min_swap_free_mib" \
+                -max-rss-mib "$max_rss_mib" \
+                -progress 60s \
+                -shard-index "$target_shard" \
+                -shard-total "$LLGO_GOROOT_SHARD_TOTAL"
+            ) 2>&1 | tee "$log"
+            local pipeline_status=("${PIPESTATUS[@]}")
+            set -e
+            return "${pipeline_status[0]}"
+          }
+
+          status=0
+          serial_versions=0
+          max_rss_mib=4096
+          # Isolate large generated builds and Windows reflection stress from
+          # their paired compiler. Intel macOS rangegen also exceeds 4 GiB.
+          serial_cases=
+          if [[ "$RUNNER_OS" == "Windows" ]] && {
+            [[ "${{ matrix.windows_arch }}" == "amd64" ]] || [[ "${{ matrix.windows_arch }}" == "arm64" ]]
+          }; then
+            serial_cases='(^|[[:space:]])(rangegen\.go|fixedbugs/issue39541\.go)$'
+          elif [[ "${{ matrix.platform }}" == "darwin/amd64" ]]; then
+            serial_cases='(^|[[:space:]])rangegen\.go$'
+          fi
+          if [[ -n "$serial_cases" ]]; then
+            for selection in "${{ steps.go126.outputs.version }}:$shard_index" "${{ steps.go127.outputs.version }}:$paired_shard_index"; do
+              version=${selection%:*}
+              target_shard=${selection##*:}
+              target_goroot=$GO126_GOROOT
+              if [[ "$version" == "${{ steps.go127.outputs.version }}" ]]; then
+                target_goroot=$GO127_GOROOT
+              fi
+              case_list="$RUNNER_TEMP/goroot-cases-go${version}.txt"
+              (
+                cd test/goroot
+                "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' -test.count=1 \
+                  -goroot "$target_goroot" -directive-mode ci -list-case-paths \
+                  -shard-index "$target_shard" -shard-total "$LLGO_GOROOT_SHARD_TOTAL"
+              ) >"$case_list" 2>&1
+              if grep -Eq "$serial_cases" "$case_list"; then
+                echo "Serializing Go versions for resource-heavy cases in Go $version shard $target_shard/$LLGO_GOROOT_SHARD_TOTAL"
+                serial_versions=1
+                if [[ "${{ matrix.platform }}" == "darwin/amd64" ]]; then max_rss_mib=8192; fi
+              fi
+              rm -f "$case_list"
+            done
+          fi
+          if [[ "$LLGO_GOROOT_SHARD_TOTAL" == "8" ]] && {
+            [[ "$RUNNER_OS" == "Linux" && "$shard_index" == "6" ]] ||
+            [[ "$RUNNER_OS" == "macOS" && "$shard_index" == "5" ]]
+          }; then
+            serial_versions=1
+          fi
+          if (( serial_versions )); then
+            run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" || status=1
+            run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" || status=1
+          else
+            run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
+            pids=("$!")
+            run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
+            pids+=("$!")
+            for pid in "${pids[@]}"; do
+              wait "$pid" || status=1
+            done
+          fi
+          exit "$status"
+
+      - name: Summarize GOROOT shard
+        if: always()
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          SHARD_INDEX: ${{ matrix.shard-index }}
+          GO126_VERSION: ${{ steps.go126.outputs.version }}
+          GO127_VERSION: ${{ steps.go127.outputs.version }}
+        run: |
+          report_dir="$RUNNER_TEMP/goroot-report"
+          mkdir -p "$report_dir" "$RUNNER_TEMP/goroot-logs"
+
+          platform="$TARGET_PLATFORM"
+
+          summarize_log() {
+            local go_version=$1
+            local log="$RUNNER_TEMP/goroot-logs/go${go_version}.log"
+            local selected observed failed skipped passed report_id shard_info actual_shard shard_total
+            touch "$log"
+            shard_info=$(sed -nE 's/.* shard=([0-9]+)\/([0-9]+) cases=.*/\1 \2/p' "$log" | tail -1)
+            read -r actual_shard shard_total <<<"$shard_info"
+            actual_shard=${actual_shard:-$SHARD_INDEX}
+            shard_total=${shard_total:-$LLGO_GOROOT_SHARD_TOTAL}
+            selected=$(sed -nE 's/.* shard=[^ ]+ cases=([0-9]+) directive_mode=.*/\1/p' "$log" | tail -1)
+            observed=$(grep -Ec -- '--- (PASS|FAIL|SKIP): TestGoRootRunCases/' "$log" || true)
+            failed=$(grep -Ec -- '--- FAIL: TestGoRootRunCases/' "$log" || true)
+            skipped=$(grep -Ec -- '--- SKIP: TestGoRootRunCases/' "$log" || true)
+            passed=$((observed - failed - skipped))
+            if [[ -z "$selected" ]]; then
+              selected='?'
+            fi
+
+            report_id="${platform//\//-}-${go_version}-${actual_shard}"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "$platform" "$go_version" "$actual_shard" "$selected" \
+              "$observed" "$passed" "$failed" "$skipped" "$shard_total" \
+              >"$report_dir/summary-$report_id.tsv"
+            awk -F '\t' \
+              -v platform="$platform" \
+              -v version="$go_version" \
+              -v shard="$actual_shard" '
+                $1 == "GOROOT_CASE_RESULT" {
+                  printf "%s\t%s\t%s\t%s\t%s\t%s\n", platform, version, shard, $2, $3, $4
+                }
+              ' "$log" >"$report_dir/cases-$report_id.tsv"
+
+            echo "### GOROOT $platform · Go $go_version · shard $actual_shard/$shard_total"
+            echo
+            echo '| Selected | Observed | Passed | Failed | Skipped |'
+            echo '|---:|---:|---:|---:|---:|'
+            echo "| $selected | $observed | $passed | $failed | $skipped |"
+            echo
+            echo '_Passed means the runner classification succeeded; expected xfail/not-applicable failures and classified flakes are counted as Passed._'
+            echo
+            echo '**Failed case paths**'
+            if [[ "$failed" -eq 0 ]]; then
+              echo
+              echo '- none'
+            else
+              # shellcheck disable=SC2016 # The backreference is expanded by sed.
+              sed -nE 's|.*--- FAIL: TestGoRootRunCases/([^ ]+).*|- `\1`|p' "$log"
+            fi
+          }
+
+          {
+            summarize_log "$GO126_VERSION"
+            echo
+            summarize_log "$GO127_VERSION"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # These short-lived artifacts only transport structured shard data to
+      # goroot-summary. The human-readable report lives in the job summary.
+      - name: Upload GOROOT shard statistics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: goroot-stat-${{ matrix.os }}-${{ matrix.windows_abi }}-${{ matrix.windows_arch }}-${{ matrix.shard-index }}
+          path: ${{ runner.temp }}/goroot-report
+          if-no-files-found: error
+          retention-days: 1
+
+  goroot-wasm:
+    name: GOROOT (wasm, ${{ matrix.wasm_profile }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/16)
+    timeout-minutes: 180
+    runs-on: ubuntu-24.04
+    outputs:
+      expected-reports: ${{ steps.report-count.outputs.count }}
+    env:
+      GOPROXY: https://proxy.golang.org,direct
+      LLGO_GOROOT_HEARTBEAT_SECONDS: "60"
+      # Leave thirty minutes for setup plus timeout diagnostics and artifacts.
+      LLGO_GOROOT_TEST_TIMEOUT: "150m"
+      LLGO_GOROOT_VERBOSE: "1"
+      LLGO_GOROOT_SHARD_TOTAL: "16"
+      GOFLAGS: -tags=llvm22
+      LLGO_BUILD_CACHE: 'on'
+    strategy:
+      fail-fast: false
+      matrix:
+        wasm_profile: [J32-Emscripten]
+        shard-index: ["12"]
+    steps:
+      - name: Record expected matrix reports
+        id: report-count
+        shell: bash
+        env:
+          MATRIX_JOB_TOTAL: ${{ strategy.job-total }}
+        run: echo "count=$((MATRIX_JOB_TOTAL * 2))" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: xgo-dev/llgo
+          ref: ${{ env.LLGO_REF }}
+
+      - name: Install dependencies
+        uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+
+      - name: Set up Emscripten
+        uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: '6.0.8'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Set up Binaryen
+        uses: ./.github/actions/setup-binaryen
+
+      - name: Restore Wasmer cache
+        if: matrix.wasm_profile == 'W32-WASI'
+        uses: ./.github/actions/setup-llgo-cache
+        with:
+          build-cache-mode: 'off'
+          crosscompile-cache-mode: 'off'
+          wasmer-cache-mode: readwrite
+
+      - name: Install Wasmer for W32
+        if: matrix.wasm_profile == 'W32-WASI'
+        run: bash dev/install_wasmer.sh
+      - name: Use qualified Wasmer PR 3 for this PR
+        if: github.event_name == 'pull_request' && matrix.wasm_profile == 'W32-WASI'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="$RUNNER_TEMP/wasmer-pr3"
+          gh run download 37578522115 --repo xgo-dev/wasmer \
+            --name wasmer-linux-amd64 --dir "$package"
+          (
+            cd "$package"
+            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            tar -xzf wasmer-linux-amd64.tar.gz
+            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+          )
+          chmod +x "$package/bin/wasmer"
+          "$package/bin/wasmer" --version -v
+          echo "$package/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Go for building LLGo and the runner
+        uses: ./.github/actions/setup-go
+
+      - name: Build LLGo and the GOROOT runner
+        id: build-tools
+        shell: bash
+        run: |
+          LLGO_BUILD_GOROOT_RUNNER=1 dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
+
+          build_version="$(go env GOVERSION)"
+          build_version="${build_version#go}"
+          echo "go-version=$build_version" >> "$GITHUB_OUTPUT"
+          echo "goroot=$(go env GOROOT)" >> "$GITHUB_OUTPUT"
+          echo "LLGO_BUILD_GO_VERSION=$build_version" >> "$GITHUB_ENV"
+
+          runner="$RUNNER_TEMP/llgo-bin/goroot-runner"
+          llgo="$RUNNER_TEMP/llgo-bin/llgo"
+          echo "LLGO_GOROOT_RUNNER=$runner" >> "$GITHUB_ENV"
+          echo "LLGO_TEST_LLGO=$llgo" >> "$GITHUB_ENV"
+
+      - name: Resolve target Go versions
+        id: target-go
+        shell: bash
+        run: |
+          source dev/go_toolchain.sh
+          echo "go126=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)" >> "$GITHUB_OUTPUT"
+          echo "go127=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up target Go 1.26
+        if: steps.target-go.outputs.go126 != steps.build-tools.outputs.go-version
+        uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ steps.target-go.outputs.go126 }}
+          cache: false
+
+      - name: Select Go 1.26 GOROOT
+        id: go126
+        shell: bash
+        env:
+          BUILD_GOROOT: ${{ steps.build-tools.outputs.goroot }}
+          BUILD_VERSION: ${{ steps.build-tools.outputs.go-version }}
+          TARGET_VERSION: ${{ steps.target-go.outputs.go126 }}
+        run: |
+          target_goroot="$(go env GOROOT)"
+          if [[ "$TARGET_VERSION" == "$BUILD_VERSION" ]]; then
+            target_goroot="$BUILD_GOROOT"
+          fi
+          if [[ ! -d "$target_goroot/test" ]]; then
+            echo "Target Go distribution does not contain GOROOT/test: $target_goroot" >&2
+            exit 1
+          fi
+          echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "goroot=$target_goroot" >> "$GITHUB_OUTPUT"
+
+      - name: Set up target Go 1.27
+        if: steps.target-go.outputs.go127 != steps.build-tools.outputs.go-version
+        uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ steps.target-go.outputs.go127 }}
+          cache: false
+
+      - name: Select Go 1.27 GOROOT
+        id: go127
+        shell: bash
+        env:
+          BUILD_GOROOT: ${{ steps.build-tools.outputs.goroot }}
+          BUILD_VERSION: ${{ steps.build-tools.outputs.go-version }}
+          TARGET_VERSION: ${{ steps.target-go.outputs.go127 }}
+        run: |
+          target_goroot="$(go env GOROOT)"
+          if [[ "$TARGET_VERSION" == "$BUILD_VERSION" ]]; then
+            target_goroot="$BUILD_GOROOT"
+          fi
+          if [[ ! -d "$target_goroot/test" ]]; then
+            echo "Target Go distribution does not contain GOROOT/test: $target_goroot" >&2
+            exit 1
+          fi
+          echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "goroot=$target_goroot" >> "$GITHUB_OUTPUT"
+
+      - name: Show toolchain versions
+        shell: bash
+        env:
+          GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
+          GO127_GOROOT: ${{ steps.go127.outputs.goroot }}
+        run: |
+          echo "LLGo build toolchain: $LLGO_BUILD_GO_VERSION"
+          "$GO126_GOROOT/bin/go" version
+          "$GO127_GOROOT/bin/go" version
+          go env GOPROXY GOMODCACHE
+          clang --version
+          emcc --version
+          node --version
+          wasm-opt --version
+
+      - name: Run GOROOT runner
+        shell: bash
+        env:
+          GOTOOLCHAIN: local
+          GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
+          GO127_GOROOT: ${{ steps.go127.outputs.goroot }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/goroot-logs" "$RUNNER_TEMP/goroot-cache"
+          shard_index=${{ matrix.shard-index }}
+          paired_shard_index=$(((shard_index + LLGO_GOROOT_SHARD_TOTAL / 2) % LLGO_GOROOT_SHARD_TOTAL))
+
+          # Go's Node wrapper reserves only 8 KiB for argv and env. Repository
+          # metadata is irrelevant to the test processes and can exceed that
+          # limit when every GITHUB_/ACTIONS_ variable is inherited.
+          for name in $(compgen -e); do
+            case "$name" in
+              GITHUB_*|ACTIONS_*) unset "$name" ;;
+            esac
+          done
+
+          run_goroot() {
+            local target_goroot=$1
+            local version=$2
+            local target_shard=$3
+            local log="$RUNNER_TEMP/goroot-logs/go${version}.log"
+            local cache="$RUNNER_TEMP/goroot-cache/go${version}"
+            mkdir -p "$cache"
+            set +e
+            (
+              cd test/goroot
+              max_rss_mib=4096
+              # Case-to-shard placement changes with the Go version and the
+              # active directive set. Detect rangegen.go from the actual
+              # selected case list instead of assuming a fixed shard.
+              case_list="$RUNNER_TEMP/goroot-cases-go${version}.txt"
+              if env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
+                "$LLGO_GOROOT_RUNNER" \
+                -test.run='^TestGoRootRunCases$' -test.count=1 \
+                -goroot "$target_goroot" \
+                -directive-mode ci \
+                -wasm-profile "${{ matrix.wasm_profile }}" \
+                -list-case-paths \
+                -shard-index "$target_shard" \
+                -shard-total "$LLGO_GOROOT_SHARD_TOTAL" \
+                >"$case_list" 2>&1 && grep -Eq '(^|[[:space:]])rangegen\.go$' "$case_list"; then
+                # rangegen.go's Wasm compiler process peaks around
+                # 7 GiB. Raise the RSS cap only for shards containing it;
+                # per-case build timeouts come from llgo's test metadata.
+                max_rss_mib=8192
+              fi
+              rm -f "$case_list"
+              env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
+                "$LLGO_GOROOT_RUNNER" \
+                -test.run='^TestGoRootRunCases$' -test.count=1 \
+                -test.timeout="$LLGO_GOROOT_TEST_TIMEOUT" -test.v \
+                -goroot "$target_goroot" \
+                -directive-mode ci \
+                -wasm-profile "${{ matrix.wasm_profile }}" \
+                -max-rss-mib "$max_rss_mib" \
+                -progress 60s \
+                -shard-index "$target_shard" \
+                -shard-total "$LLGO_GOROOT_SHARD_TOTAL"
+            ) 2>&1 | tee "$log"
+            local pipeline_status=("${PIPESTATUS[@]}")
+            set -e
+            return "${pipeline_status[0]}"
+          }
+
+          run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
+          pids=("$!")
+          run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
+          pids+=("$!")
+          status=0
+          for pid in "${pids[@]}"; do
+            wait "$pid" || status=1
+          done
+          exit "$status"
+
+      - name: Summarize GOROOT shard
+        if: always()
+        shell: bash
+        env:
+          SHARD_INDEX: ${{ matrix.shard-index }}
+          GO126_VERSION: ${{ steps.go126.outputs.version }}
+          GO127_VERSION: ${{ steps.go127.outputs.version }}
+        run: |
+          report_dir="$RUNNER_TEMP/goroot-report"
+          mkdir -p "$report_dir" "$RUNNER_TEMP/goroot-logs"
+
+          platform="${{ matrix.wasm_profile }}"
+
+          summarize_log() {
+            local go_version=$1
+            local log="$RUNNER_TEMP/goroot-logs/go${go_version}.log"
+            local selected observed failed skipped passed report_id shard_info actual_shard shard_total
+            touch "$log"
+            shard_info=$(sed -nE 's/.* shard=([0-9]+)\/([0-9]+) cases=.*/\1 \2/p' "$log" | tail -1)
+            read -r actual_shard shard_total <<<"$shard_info"
+            actual_shard=${actual_shard:-$SHARD_INDEX}
+            shard_total=${shard_total:-$LLGO_GOROOT_SHARD_TOTAL}
+            selected=$(sed -nE 's/.* shard=[^ ]+ cases=([0-9]+) directive_mode=.*/\1/p' "$log" | tail -1)
+            observed=$(grep -Ec -- '--- (PASS|FAIL|SKIP): TestGoRootRunCases/' "$log" || true)
+            failed=$(grep -Ec -- '--- FAIL: TestGoRootRunCases/' "$log" || true)
+            skipped=$(grep -Ec -- '--- SKIP: TestGoRootRunCases/' "$log" || true)
+            passed=$((observed - failed - skipped))
+            if [[ -z "$selected" ]]; then
+              selected='?'
+            fi
+
+            report_id="${platform//\//-}-${go_version}-${actual_shard}"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "$platform" "$go_version" "$actual_shard" "$selected" \
+              "$observed" "$passed" "$failed" "$skipped" "$shard_total" \
+              >"$report_dir/summary-$report_id.tsv"
+            awk -F '\t' \
+              -v platform="$platform" \
+              -v version="$go_version" \
+              -v shard="$actual_shard" '
+                $1 == "GOROOT_CASE_RESULT" {
+                  printf "%s\t%s\t%s\t%s\t%s\t%s\n", platform, version, shard, $2, $3, $4
+                }
+              ' "$log" >"$report_dir/cases-$report_id.tsv"
+
+            echo "### GOROOT $platform (${{ matrix.wasm_profile }}) · Go $go_version · shard $actual_shard/$shard_total"
+            echo
+            echo '| Selected | Observed | Passed | Failed | Skipped |'
+            echo '|---:|---:|---:|---:|---:|'
+            echo "| $selected | $observed | $passed | $failed | $skipped |"
+            echo
+            echo '_Passed means the runner classification succeeded; expected xfail/not-applicable failures and classified flakes are counted as Passed._'
+            echo
+            echo '**Failed case paths**'
+            if [[ "$failed" -eq 0 ]]; then
+              echo
+              echo '- none'
+            else
+              # shellcheck disable=SC2016 # The backreference is expanded by sed.
+              sed -nE 's|.*--- FAIL: TestGoRootRunCases/([^ ]+).*|- `\1`|p' "$log"
+            fi
+          }
+
+          {
+            summarize_log "$GO126_VERSION"
+            echo
+            summarize_log "$GO127_VERSION"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload GOROOT shard statistics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: goroot-stat-wasm-${{ matrix.wasm_profile }}-${{ matrix.shard-index }}
+          path: ${{ runner.temp }}/goroot-report
+          if-no-files-found: error
+          retention-days: 1
+
