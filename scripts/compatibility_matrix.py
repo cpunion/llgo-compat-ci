@@ -46,7 +46,7 @@ def regression_matrix():
             for host in host_jobs() if host["platform"] in native_cases]
     intel = next(job for job in jobs if job["platform"] == "darwin/amd64")
     jobs.append(dict(intel, go_version="1.26"))
-    js_cases = ("clearfat.go", "winbatch.go", "fixedbugs/issue79186.go", "fixedbugs/issue22662.go", "fixedbugs/issue5856.go", "rangegen.go", "fixedbugs/issue38093.go")
+    js_cases = ("clearfat.go", "stackobj2.go", "winbatch.go", "fixedbugs/issue79186.go", "fixedbugs/issue22662.go", "fixedbugs/issue5856.go", "rangegen.go", "fixedbugs/issue38093.go")
     wasi_cases = ("winbatch.go", "fixedbugs/issue34395.go", "fixedbugs/issue31419.go", "fixedbugs/issue14646.go", "fixedbugs/issue4618.go", "rangegen.go", "fixedbugs/issue78081.go")
     jobs.extend(dict(platform=profile, os="ubuntu-24.04", windows_abi="", windows_arch="", go_version="1.27",
                      wasm_profile=profile, case_paths=wasi_cases if profile == "W32-WASI" else js_cases)

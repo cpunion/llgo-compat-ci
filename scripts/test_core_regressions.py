@@ -13,7 +13,9 @@ class CoreRegressionTests(unittest.TestCase):
         self.assertEqual({"J32-GoJS", "J32-Emscripten", "J64-Emscripten", "W32-WASI"}, {j["wasm_profile"] for j in jobs if j["wasm_profile"]})
         for job in jobs:
             with self.subTest(platform=job["platform"]):
-                self.assertLessEqual(len(job["case_paths"]), 7)
+                self.assertLessEqual(len(job["case_paths"]), 8)
+                if job["wasm_profile"].startswith("J"):
+                    self.assertIn("stackobj2.go", job["case_paths"])
                 self.assertNotIn("/", job["artifact"])
                 pattern = re.compile(job["cases"])
                 self.assertTrue(all(pattern.fullmatch(path) for path in job["case_paths"]))
