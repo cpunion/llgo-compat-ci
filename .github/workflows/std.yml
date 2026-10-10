@@ -32,8 +32,7 @@ permissions:
   actions: read
 
 env:
-  # PR checks qualify LLGo #2764; daily/manual runs keep their configured ref.
-  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && 'dd08de227cdd1ac08abde24b6476b155e51dc951' || 'main') }}
+  LLGO_REF: ${{ inputs.llgo_ref || 'main' }}
 
 jobs:
   std-matrix:
