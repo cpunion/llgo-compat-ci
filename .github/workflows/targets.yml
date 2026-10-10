@@ -1,0 +1,377 @@
+name: Target profiles
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/targets.yml
+      - .github/actions/setup-macos-intel-llvm/**
+      - scripts/**
+  workflow_dispatch:
+    inputs:
+      llgo_repository:
+        description: LLGo repository to test
+        required: true
+        default: xgo-dev/llgo
+        type: string
+      llgo_ref:
+        description: Branch, tag, or commit to test
+        required: true
+        default: main
+        type: string
+  schedule:
+    - cron: "30 18 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # PR checks qualify LLGo #2764; daily/manual runs keep their configured ref.
+  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && 'dd08de227cdd1ac08abde24b6476b155e51dc951' || 'main') }}
+
+jobs:
+  matrix:
+    name: Embedded matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify matrix and report coverage regressions
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Generate embedded matrix
+        id: matrix
+        run: |
+          matrix=$(python3 scripts/compatibility_matrix.py embedded)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  embedded:
+    needs: matrix
+    name: Embedded (${{ matrix.platform }}, ${{ matrix.mode }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ env.LLGO_REF }}
+      - name: Check out Intel LLVM setup
+        if: matrix.platform == 'darwin/amd64'
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
+        if: matrix.platform == 'darwin/amd64'
+      - uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+          install-llvm: ${{ matrix.platform != 'darwin/amd64' }}
+          windows-abi: ${{ matrix.windows_abi || 'msvc' }}
+          windows-arch: ${{ matrix.windows_arch || 'amd64' }}
+      - uses: ./.github/actions/setup-embed-deps
+      - uses: ./.github/actions/setup-go
+        with:
+          architecture: ${{ matrix.windows_arch == 'arm64' && 'arm64' || startsWith(matrix.os, 'windows') && 'x64' || '' }}
+      - name: Build compiler
+        shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
+        run: |
+          go install ./cmd/llgo
+          echo "LLGO_ROOT=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+      - name: Activate Windows target
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/activate-windows-target
+        with:
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+      - name: Verify native target identity
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          target_os=$(go env GOOS)
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            target_os="windows-${LLGO_WINDOWS_ABI}"
+          fi
+          actual="$target_os/$(go env GOARCH)"
+          if [[ "$actual" != "$TARGET_PLATFORM" ]]; then
+            echo "error: target is $actual, expected $TARGET_PLATFORM" >&2
+            exit 1
+          fi
+
+      - name: Test ESP32 and ESP32-C3 firmware
+        shell: bash
+        env:
+          TARGET_MODE: ${{ matrix.mode }}
+        run: |
+          set -o pipefail
+          flag=--embedded
+          if [[ "$TARGET_MODE" == build-only ]]; then
+            flag=--embedded-build-only
+          fi
+          bash .github/workflows/test_demo.sh "$flag" 2>&1 | tee "$RUNNER_TEMP/embedded.log"
+      - name: Record target report
+        if: always()
+        shell: bash
+        env:
+          PROFILE: ${{ matrix.platform }}
+          MODE: ${{ matrix.mode }}
+          RESULT: ${{ job.status }}
+        run: |
+          python3 - <<'PY' > "$RUNNER_TEMP/target-report.json"
+          import json, os
+          print(json.dumps(dict(suite="embedded", profile=os.environ["PROFILE"], mode=os.environ["MODE"], result=os.environ["RESULT"])))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: target-stat-embedded-${{ matrix.os }}-${{ matrix.windows_abi }}-${{ matrix.windows_arch }}
+          path: |
+            ${{ runner.temp }}/target-report.json
+            ${{ runner.temp }}/embedded.log
+          if-no-files-found: error
+
+  target-build:
+    needs: matrix
+    name: Target build (${{ matrix.fixture }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture: [empty, defer]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ env.LLGO_REF }}
+      - uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+      - uses: ./.github/actions/setup-go
+      - name: Build compiler
+        run: |
+          go install ./cmd/llgo
+          echo "LLGO_ROOT=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+      - name: Build the target catalog
+        working-directory: _demo/embed/targetsbuild
+        env:
+          FIXTURE: ${{ matrix.fixture }}
+        run: |
+          set -o pipefail
+          bash build.sh "$FIXTURE" 2>&1 | tee "$RUNNER_TEMP/targets.log"
+      - name: Record target report
+        if: always()
+        env:
+          PROFILE: ${{ matrix.fixture }}
+          RESULT: ${{ job.status }}
+        run: |
+          python3 - <<'PY' > "$RUNNER_TEMP/target-report.json"
+          import json, os
+          print(json.dumps(dict(suite="target-build", profile=os.environ["PROFILE"], mode="compile", result=os.environ["RESULT"])))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: target-stat-build-${{ matrix.fixture }}
+          path: |
+            ${{ runner.temp }}/target-report.json
+            ${{ runner.temp }}/targets.log
+          if-no-files-found: error
+
+  embedded-debug:
+    needs: matrix
+    name: embedded debug (${{ matrix.os }}, ${{ matrix.backend }})
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+        backend: [gdb, lldb]
+    runs-on: ${{ matrix.os }}
+    env:
+      GOMAXPROCS: '4'
+      GOFLAGS: '-p=2'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ env.LLGO_REF }}
+      - uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: '22'
+      - uses: ./.github/actions/setup-go
+      - name: Build compiler
+        shell: bash
+        run: go install ./cmd/llgo
+
+      # Install after building: this action's MSYS2 shell belongs to debugger
+      # tools, not the pinned compiler environment installed by setup-deps.
+      - uses: ./.github/actions/setup-gdb
+      - name: Install Linux emulator and LLDB
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y qemu-system-arm lldb-22
+      - name: Install macOS emulator
+        if: runner.os == 'macOS'
+        run: brew install qemu
+      - name: Install Windows emulator in the isolated debugger environment
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        env:
+          LLGO_PACMAN_RETRY_DELAY_SECONDS: "30"
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-deps/pacman_retry.sh
+          pacman_with_retry --noconfirm -S --needed mingw-w64-clang-x86_64-qemu
+          echo "QEMU_SYSTEM_ARM=$(cygpath -m /clang64/bin/qemu-system-arm.exe)" >> "$GITHUB_ENV"
+      - name: Install matching Windows LLDB Python runtime
+        if: runner.os == 'Windows' && matrix.backend == 'lldb'
+        id: lldb-python
+        uses: actions/setup-python@v7
+        with:
+          # The LLVM 22.1.8 Windows LLDB installer links python311.dll.
+          python-version: '3.11.9'
+          architecture: x64
+          update-environment: false
+      - name: Configure matching Windows LLDB Python runtime
+        if: runner.os == 'Windows' && matrix.backend == 'lldb'
+        shell: pwsh
+        env:
+          LLDB_PYTHON: ${{ steps.lldb-python.outputs.python-path }}
+        run: |
+          $prefix = (& $env:LLDB_PYTHON -c "import sys; print(sys.base_prefix)").Trim()
+          if (-not (Test-Path (Join-Path $prefix 'python311.dll'))) {
+            throw "The LLVM 22 LLDB Python runtime is incomplete: $prefix"
+          }
+          "LLGO_WINDOWS_LLDB_PYTHON_HOME=$prefix" >> $env:GITHUB_ENV
+      - name: Test preloaded and explicit-download Cortex-M sessions
+        shell: bash
+        run: python3 test/debug/embedded/runtest.py --backend "${{ matrix.backend }}"
+      - name: Test physical-probe opt-in guard
+        shell: bash
+        run: |
+          set +e
+          output="$(bash test/debug/hardware/runtest.sh 2>&1)"
+          result=$?
+          set -e
+          test "${result}" -eq 2
+          grep -F 'LLGO_HARDWARE_CONFIRM=flash' <<<"${output}"
+      - name: Record target report
+        if: always()
+        shell: bash
+        env:
+          PROFILE: ${{ matrix.os }}
+          MODE: ${{ matrix.backend }}
+          RESULT: ${{ job.status }}
+        run: |
+          python3 - <<'PYREPORT' > "$RUNNER_TEMP/target-report.json"
+          import json, os
+          print(json.dumps(dict(suite="embedded-debug", profile=os.environ["PROFILE"], mode=os.environ["MODE"], result=os.environ["RESULT"])))
+          PYREPORT
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: target-stat-debug-${{ matrix.os }}-${{ matrix.backend }}
+          path: ${{ runner.temp }}/target-report.json
+          if-no-files-found: error
+
+  windows-gnu-cross:
+    needs: matrix
+    name: windows GNU cross (${{ matrix.os }}, ${{ matrix.windows_arch }})
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+        windows_arch: [amd64, arm64, "386"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ env.LLGO_REF }}
+
+      - name: Install host dependencies
+        uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+
+      - name: Set up Go for building llgo
+        uses: ./.github/actions/setup-go
+        with:
+          go-version: "1.27.0"
+
+      - name: Build Unix host compiler
+        shell: bash
+        run: |
+          go build -p=2 -o "$RUNNER_TEMP/llgo-host" ./cmd/llgo
+          # This development binary lives outside LLGO_ROOT/bin. Point it at
+          # the checkout explicitly so standard-library source patches are
+          # available to the following cross-host builds.
+          echo "LLGO_ROOT=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+
+      - name: Test cross-host windows/${{ matrix.windows_arch }}
+        uses: ./.github/actions/test-windows-cross
+        with:
+          llgo: ${{ runner.temp }}/llgo-host
+          windows-arch: ${{ matrix.windows_arch }}
+      - name: Record target report
+        if: always()
+        shell: bash
+        env:
+          PROFILE: ${{ matrix.os }}/windows-mingw/${{ matrix.windows_arch }}
+          RESULT: ${{ job.status }}
+        run: |
+          python3 - <<'PYREPORT' > "$RUNNER_TEMP/target-report.json"
+          import json, os
+          print(json.dumps(dict(suite="windows-cross", profile=os.environ["PROFILE"], mode="compile", result=os.environ["RESULT"])))
+          PYREPORT
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: target-stat-cross-${{ matrix.os }}-${{ matrix.windows_arch }}
+          path: ${{ runner.temp }}/target-report.json
+          if-no-files-found: error
+
+  summary:
+    name: Target profile summary
+    needs: [embedded, target-build, embedded-debug, windows-gnu-cross]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: target-stat-*
+          path: reports
+      - name: Verify all target profiles
+        if: always()
+        env:
+          EMBEDDED_RESULT: ${{ needs.embedded.result }}
+          BUILD_RESULT: ${{ needs.target-build.result }}
+          DEBUG_RESULT: ${{ needs.embedded-debug.result }}
+          CROSS_RESULT: ${{ needs.windows-gnu-cross.result }}
+        run: |
+          status=0
+          python3 scripts/check_report_coverage.py targets --reports reports > "$RUNNER_TEMP/target-summary.md" || status=1
+          cat "$RUNNER_TEMP/target-summary.md" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$EMBEDDED_RESULT" != success || "$BUILD_RESULT" != success || "$DEBUG_RESULT" != success || "$CROSS_RESULT" != success ]]; then
+            status=1
+          fi
+          exit "$status"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: target-profile-summary
+          path: ${{ runner.temp }}/target-summary.md
+          if-no-files-found: error

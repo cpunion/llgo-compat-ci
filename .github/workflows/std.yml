@@ -1,6 +1,11 @@
 name: Standard Library
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/std.yml
+      - .github/actions/setup-macos-intel-llvm/**
+      - scripts/**
   workflow_dispatch:
     inputs:
       llgo_repository:
@@ -18,124 +23,60 @@ on:
     - cron: "0 20 * * *"
 
 concurrency:
-  # Periodic compatibility runs are reports, so a later invocation must not
-  # cancel one that has already consumed hosted-runner time.
+  # Preserve daily/manual reports and stop superseded contribution checks.
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
+  actions: read
+
+env:
+  # PR checks qualify LLGo #2764; daily/manual runs keep their configured ref.
+  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && 'dd08de227cdd1ac08abde24b6476b155e51dc951' || 'main') }}
 
 jobs:
+  std-matrix:
+    name: STD matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify matrix and report coverage regressions
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Generate native matrix
+        id: matrix
+        run: |
+          matrix=$(python3 scripts/compatibility_matrix.py std)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   native:
+    needs: std-matrix
     name: std (${{ matrix.lane }}, ${{ matrix.os }}${{ matrix.windows_abi && format(', {0}', matrix.windows_abi) || '' }}${{ matrix.windows_arch && format(', {0}', matrix.windows_arch) || '' }}, Go ${{ matrix.go_version }}, shard ${{ matrix.shard_index }}/${{ matrix.shard_total }})
     timeout-minutes: ${{ matrix.windows_arch == 'arm64' && 120 || matrix.windows_arch == '386' && 90 || 60 }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            llvm: 22
-            go_version: "1.20-1.26"
-            lane: compatibility
-            shard_index: "0"
-            shard_total: "1"
-            check_symbols: true
-          - os: ubuntu-latest
-            llvm: 22
-            go_version: "1.27"
-            lane: full
-            shard_index: "0"
-            shard_total: "2"
-            check_symbols: true
-            std_buildmodes: true
-          - os: ubuntu-latest
-            llvm: 22
-            go_version: "1.27"
-            lane: full
-            shard_index: "1"
-            shard_total: "2"
-            check_symbols: true
-            std_buildmodes: true
-          - os: macos-latest
-            llvm: 22
-            go_version: "1.27"
-            lane: full
-            shard_index: "0"
-            shard_total: "1"
-          - os: windows-2022
-            llvm: 22
-            windows_abi: msvc
-            windows_arch: amd64
-            host_go_arch: x64
-            go_version: "1.27"
-            lane: full
-            shard_index: "0"
-            shard_total: "1"
-          - os: windows-2022
-            llvm: 22
-            windows_abi: mingw
-            windows_arch: amd64
-            host_go_arch: x64
-            go_version: "1.27"
-            lane: full
-            shard_index: "0"
-            shard_total: "1"
-          - os: windows-11-arm
-            llvm: 22
-            windows_abi: msvc
-            windows_arch: arm64
-            host_go_arch: arm64
-            go_version: "1.27"
-            lane: full
-            shard_index: "0"
-            shard_total: "2"
-          - os: windows-11-arm
-            llvm: 22
-            windows_abi: msvc
-            windows_arch: arm64
-            host_go_arch: arm64
-            go_version: "1.27"
-            lane: full
-            shard_index: "1"
-            shard_total: "2"
-          - os: windows-11-arm
-            llvm: 22
-            windows_abi: mingw
-            windows_arch: arm64
-            host_go_arch: arm64
-            go_version: "1.27"
-            lane: full
-            shard_index: "0"
-            shard_total: "1"
-          - os: windows-2022
-            llvm: 22
-            windows_abi: msvc
-            windows_arch: "386"
-            host_go_arch: x64
-            go_version: "1.27"
-            lane: full
-            shard_index: "0"
-            shard_total: "1"
-          - os: windows-2022
-            llvm: 22
-            windows_abi: mingw
-            windows_arch: "386"
-            host_go_arch: x64
-            go_version: "1.27"
-            lane: full
-            shard_index: "0"
-            shard_total: "1"
+      matrix: ${{ fromJSON(needs.std-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
+      - name: Check out Intel LLVM setup
+        if: matrix.platform == 'darwin/amd64'
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
+        if: matrix.platform == 'darwin/amd64'
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
         with:
           llvm-version: ${{ matrix.llvm }}
+          install-llvm: ${{ matrix.platform != 'darwin/amd64' }}
           windows-abi: ${{ matrix.windows_abi || 'msvc' }}
           windows-arch: ${{ matrix.windows_arch || 'amd64' }}
 
@@ -149,6 +90,10 @@ jobs:
 
       - name: Build LLGo and test tools
         shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
         run: |
           dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
           echo "$RUNNER_TEMP/llgo-bin" >> "$GITHUB_PATH"
@@ -160,6 +105,21 @@ jobs:
         with:
           windows-abi: ${{ matrix.windows_abi }}
           windows-arch: ${{ matrix.windows_arch }}
+
+      - name: Verify native target identity
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          target_os=$(go env GOOS)
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            target_os="windows-${LLGO_WINDOWS_ABI}"
+          fi
+          actual="$target_os/$(go env GOARCH)"
+          if [[ "$actual" != "$TARGET_PLATFORM" ]]; then
+            echo "error: target is $actual, expected $TARGET_PLATFORM" >&2
+            exit 1
+          fi
 
       - name: Run standard library tests
         env:
@@ -227,9 +187,7 @@ jobs:
         shell: bash
         env:
           LANE: ${{ matrix.lane }}
-          MATRIX_OS: ${{ matrix.os }}
-          WINDOWS_ABI: ${{ matrix.windows_abi }}
-          WINDOWS_ARCH: ${{ matrix.windows_arch }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
           GO_VERSION: ${{ matrix.go_version }}
           SHARD_INDEX: ${{ matrix.shard_index }}
           SHARD_TOTAL: ${{ matrix.shard_total }}
@@ -237,12 +195,7 @@ jobs:
         run: |
           report_dir="$RUNNER_TEMP/std-native-report"
           mkdir -p "$report_dir"
-          platform=linux/amd64
-          if [[ "$MATRIX_OS" == "macos-latest" ]]; then
-            platform=darwin/arm64
-          elif [[ "$MATRIX_OS" == "windows-2022" || "$MATRIX_OS" == "windows-11-arm" ]]; then
-            platform="windows-${WINDOWS_ABI}/${WINDOWS_ARCH}"
-          fi
+          platform="$TARGET_PLATFORM"
           report_id="${LANE}-${platform//\//-}-${GO_VERSION}-${SHARD_INDEX}"
           printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$platform" "$LANE" "$GO_VERSION" "$SHARD_INDEX" "$SHARD_TOTAL" "$JOB_STATUS" \
@@ -277,7 +230,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
@@ -305,6 +258,23 @@ jobs:
       - name: Install Wasmer for W32
         if: ${{ matrix.profile == 'W32-WASI' }}
         run: bash dev/install_wasmer.sh
+      - name: Use qualified Wasmer PR 3 for this PR
+        if: github.event_name == 'pull_request' && matrix.profile == 'W32-WASI'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="$RUNNER_TEMP/wasmer-pr3"
+          gh run download 37578522115 --repo xgo-dev/wasmer \
+            --name wasmer-linux-amd64 --dir "$package"
+          (
+            cd "$package"
+            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            tar -xzf wasmer-linux-amd64.tar.gz
+            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+          )
+          chmod +x "$package/bin/wasmer"
+          "$package/bin/wasmer" --version -v
+          echo "$package/bin" >> "$GITHUB_PATH"
       - name: Record Wasmer revision and backends
         if: ${{ matrix.profile == 'W32-WASI' }}
         run: wasmer --version -v
@@ -374,7 +344,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
@@ -412,7 +382,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
@@ -435,12 +405,34 @@ jobs:
           wasmer-cache-mode: readwrite
       - name: Install Wasmer for W32
         run: bash dev/install_wasmer.sh
+      - name: Use qualified Wasmer PR 3 for this PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="$RUNNER_TEMP/wasmer-pr3"
+          gh run download 37578522115 --repo xgo-dev/wasmer \
+            --name wasmer-linux-amd64 --dir "$package"
+          (
+            cd "$package"
+            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            tar -xzf wasmer-linux-amd64.tar.gz
+            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+          )
+          chmod +x "$package/bin/wasmer"
+          "$package/bin/wasmer" --version -v
+          echo "$package/bin" >> "$GITHUB_PATH"
       - name: Record Wasmer revision and backends
         run: wasmer --version -v
       - name: Build LLGo and host-side GOROOT runner
         run: |
           go build -o "$RUNNER_TEMP/llgo" ./cmd/llgo
           go test -c -o "$RUNNER_TEMP/goroot-runner" ./test/goroot
+      - name: Test WebAssembly runtime ABI with Go 1.24 and 1.27
+        timeout-minutes: 15
+        env:
+          LLGO: ${{ runner.temp }}/llgo
+        run: dev/test_wasm_runtime_go_versions.sh 1.24 1.27
       - name: Exercise representative runnable cases
         run: |
           set -o pipefail
@@ -490,10 +482,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
 
       - name: Set up Go for the report generator
         uses: ./.github/actions/setup-go
+
+      - name: Check out compatibility report checks
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
 
       - name: Download native reports
         continue-on-error: true
@@ -516,7 +513,15 @@ jobs:
         if: always()
         run: |
           report_md="$RUNNER_TEMP/std-report.md"
-          if [[ -d dev/stdreport ]]; then
+          coverage_md="$RUNNER_TEMP/std-coverage.md"
+          coverage_ok=0
+          if python3 compatibility-ci/scripts/check_report_coverage.py std \
+            --native-reports native-reports --wasm-reports wasm-reports >"$coverage_md"; then
+            coverage_ok=1
+          fi
+          # The detailed generator assumes complete reports. Use the summary
+          # tables below for missing reports, without emitting a success claim.
+          if [[ "$coverage_ok" == 1 && -d dev/stdreport ]]; then
             go run ./dev/stdreport \
               -native-reports native-reports \
               -wasm-reports wasm-reports \
@@ -569,8 +574,11 @@ jobs:
             } >"$report_md"
           fi
 
+          cat "$coverage_md" "$report_md" >"$RUNNER_TEMP/std-report-with-coverage.md"
+          mv "$RUNNER_TEMP/std-report-with-coverage.md" "$report_md"
           cat "$report_md" >>"$GITHUB_STEP_SUMMARY"
           echo "STD_REPORT=$report_md" >>"$GITHUB_ENV"
+          echo "STD_COVERAGE_OK=$coverage_ok" >>"$GITHUB_ENV"
 
       - name: Preserve standard library summary report
         if: always()
@@ -605,6 +613,10 @@ jobs:
       - name: Verify standard library matrix result
         if: always()
         run: |
+          if [[ "$STD_COVERAGE_OK" != 1 ]]; then
+            echo "error: incomplete standard library reports" >&2
+            exit 1
+          fi
           if [[ "${{ needs.native.result }}" != "success" || "${{ needs.wasm-std.result }}" != "success" || "${{ needs.wasm-browser.result }}" != "success" || "${{ needs.wasm-sentinels.result }}" != "success" ]]; then
             echo "error: one or more standard library jobs did not succeed" >&2
             exit 1

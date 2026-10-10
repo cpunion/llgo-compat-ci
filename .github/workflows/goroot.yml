@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - .github/workflows/goroot.yml
+      - .github/workflows/regressions.yml
+      - .github/actions/setup-macos-intel-llvm/**
+      - scripts/**
   workflow_dispatch:
     inputs:
       llgo_repository:
@@ -22,15 +25,45 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  # Periodic compatibility runs are reports, so a later invocation must not
-  # cancel one that has already consumed hosted-runner time.
+  # Preserve scheduled/manual reports, but give the latest PR revision the
+  # runners instead of finishing obsolete contribution checks.
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # PR checks qualify LLGo #2764; daily/manual runs keep their configured ref.
+  LLGO_REF: ${{ inputs.llgo_ref || (github.event_name == 'pull_request' && 'dd08de227cdd1ac08abde24b6476b155e51dc951' || 'main') }}
 
 jobs:
+  core-regressions:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/regressions.yml
+    with:
+      llgo_repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+      llgo_ref: ${{ inputs.llgo_ref || 'dd08de227cdd1ac08abde24b6476b155e51dc951' }}
+      wasmer_pr3: true
+
+  goroot-matrix:
+    name: GOROOT matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify matrix and report coverage regressions
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Generate native matrix
+        id: matrix
+        run: |
+          matrix=$(python3 scripts/compatibility_matrix.py goroot)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   goroot:
+    needs: [goroot-matrix, core-regressions]
+    if: ${{ !cancelled() && needs.goroot-matrix.result == 'success' && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success') }}
     name: GOROOT (${{ matrix.os }}${{ startsWith(matrix.os, 'windows') && format(', {0}, {1}', matrix.windows_abi, matrix.windows_arch) || '' }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/${{ matrix.shard-total }})
     timeout-minutes: 180
     outputs:
@@ -44,21 +77,7 @@ jobs:
       LLGO_GOROOT_SHARD_TOTAL: ${{ matrix.shard-total }}
     strategy:
       fail-fast: false
-      matrix:
-        # Validate only the last runner-lost shard, split in half.
-        include:
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "29"
-            shard-total: "64"
-            paired-shard-index: "25"
-          - os: windows-11-arm
-            windows_abi: msvc
-            windows_arch: arm64
-            shard-index: "61"
-            shard-total: "64"
-            paired-shard-index: "57"
+      matrix: ${{ fromJSON(needs.goroot-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Record expected matrix reports
@@ -73,12 +92,22 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
+
+      - name: Check out Intel LLVM setup
+        if: matrix.platform == 'darwin/amd64'
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
+        if: matrix.platform == 'darwin/amd64'
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
+          install-llvm: ${{ matrix.platform != 'darwin/amd64' }}
           windows-abi: ${{ matrix.windows_abi }}
           windows-arch: ${{ matrix.windows_arch }}
 
@@ -90,6 +119,10 @@ jobs:
       - name: Build LLGo and the GOROOT runner
         id: build-tools
         shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
         run: |
           LLGO_BUILD_GOROOT_RUNNER=1 dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
 
@@ -185,6 +218,21 @@ jobs:
           windows-abi: ${{ matrix.windows_abi }}
           windows-arch: ${{ matrix.windows_arch }}
 
+      - name: Verify native target identity
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          target_os=$(go env GOOS)
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            target_os="windows-${LLGO_WINDOWS_ABI}"
+          fi
+          actual="$target_os/$(go env GOARCH)"
+          if [[ "$actual" != "$TARGET_PLATFORM" ]]; then
+            echo "error: target is $actual, expected $TARGET_PLATFORM" >&2
+            exit 1
+          fi
+
       - name: Show toolchain versions
         shell: bash
         env:
@@ -242,6 +290,7 @@ jobs:
                 -goroot "$target_goroot" \
                 -directive-mode ci \
                 -min-swap-free-mib "$min_swap_free_mib" \
+                -max-rss-mib "$max_rss_mib" \
                 -progress 60s \
                 -shard-index "$target_shard" \
                 -shard-total "$LLGO_GOROOT_SHARD_TOTAL"
@@ -253,6 +302,40 @@ jobs:
 
           status=0
           serial_versions=0
+          max_rss_mib=4096
+          # Isolate large generated builds and Windows reflection stress from
+          # their paired compiler. Intel macOS rangegen also exceeds 4 GiB.
+          serial_cases=
+          if [[ "$RUNNER_OS" == "Windows" ]] && {
+            [[ "${{ matrix.windows_arch }}" == "amd64" ]] || [[ "${{ matrix.windows_arch }}" == "arm64" ]]
+          }; then
+            serial_cases='(^|[[:space:]])(rangegen\.go|fixedbugs/issue39541\.go)$'
+          elif [[ "${{ matrix.platform }}" == "darwin/amd64" ]]; then
+            serial_cases='(^|[[:space:]])rangegen\.go$'
+          fi
+          if [[ -n "$serial_cases" ]]; then
+            for selection in "${{ steps.go126.outputs.version }}:$shard_index" "${{ steps.go127.outputs.version }}:$paired_shard_index"; do
+              version=${selection%:*}
+              target_shard=${selection##*:}
+              target_goroot=$GO126_GOROOT
+              if [[ "$version" == "${{ steps.go127.outputs.version }}" ]]; then
+                target_goroot=$GO127_GOROOT
+              fi
+              case_list="$RUNNER_TEMP/goroot-cases-go${version}.txt"
+              (
+                cd test/goroot
+                "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' -test.count=1 \
+                  -goroot "$target_goroot" -directive-mode ci -list-case-paths \
+                  -shard-index "$target_shard" -shard-total "$LLGO_GOROOT_SHARD_TOTAL"
+              ) >"$case_list" 2>&1
+              if grep -Eq "$serial_cases" "$case_list"; then
+                echo "Serializing Go versions for resource-heavy cases in Go $version shard $target_shard/$LLGO_GOROOT_SHARD_TOTAL"
+                serial_versions=1
+                if [[ "${{ matrix.platform }}" == "darwin/amd64" ]]; then max_rss_mib=8192; fi
+              fi
+              rm -f "$case_list"
+            done
+          fi
           if [[ "$LLGO_GOROOT_SHARD_TOTAL" == "8" ]] && {
             [[ "$RUNNER_OS" == "Linux" && "$shard_index" == "6" ]] ||
             [[ "$RUNNER_OS" == "macOS" && "$shard_index" == "5" ]]
@@ -277,9 +360,7 @@ jobs:
         if: always()
         shell: bash
         env:
-          MATRIX_OS: ${{ matrix.os }}
-          WINDOWS_ABI: ${{ matrix.windows_abi }}
-          WINDOWS_ARCH: ${{ matrix.windows_arch }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
           SHARD_INDEX: ${{ matrix.shard-index }}
           GO126_VERSION: ${{ steps.go126.outputs.version }}
           GO127_VERSION: ${{ steps.go127.outputs.version }}
@@ -287,14 +368,7 @@ jobs:
           report_dir="$RUNNER_TEMP/goroot-report"
           mkdir -p "$report_dir" "$RUNNER_TEMP/goroot-logs"
 
-          platform=linux/amd64
-          if [[ "$MATRIX_OS" == "macos-latest" ]]; then
-            platform=darwin/arm64
-          elif [[ "$MATRIX_OS" == "windows-2022" ]]; then
-            platform="windows-${WINDOWS_ABI}/${WINDOWS_ARCH}"
-          elif [[ "$MATRIX_OS" == "windows-11-arm" ]]; then
-            platform="windows-${WINDOWS_ABI}/${WINDOWS_ARCH}"
-          fi
+          platform="$TARGET_PLATFORM"
 
           summarize_log() {
             local go_version=$1
@@ -315,9 +389,9 @@ jobs:
             fi
 
             report_id="${platform//\//-}-${go_version}-${actual_shard}"
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
               "$platform" "$go_version" "$actual_shard" "$selected" \
-              "$observed" "$passed" "$failed" "$skipped" \
+              "$observed" "$passed" "$failed" "$skipped" "$shard_total" \
               >"$report_dir/summary-$report_id.tsv"
             awk -F '\t' \
               -v platform="$platform" \
@@ -364,10 +438,9 @@ jobs:
           retention-days: 1
 
   goroot-wasm:
+    needs: [goroot-matrix, core-regressions]
+    if: ${{ !cancelled() && needs.goroot-matrix.result == 'success' && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success') }}
     name: GOROOT (wasm, ${{ matrix.wasm_profile }}, Go 1.26+1.27, shard ${{ matrix.shard-index }}/16)
-    if: >-
-      ${{ github.event_name != 'pull_request' ||
-          github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923' }}
     timeout-minutes: 180
     runs-on: ubuntu-24.04
     outputs:
@@ -384,7 +457,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        wasm_profile: [J32-GoJS]
+        wasm_profile: [J32-GoJS, J32-Emscripten, J64-Emscripten, W32-WASI]
         # Wasm cases are substantially slower than native cases. These shards
         # run on Ubuntu capacity and keep each runner near the 25-minute target
         # without consuming additional macOS or Windows runners.
@@ -400,7 +473,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
 
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
@@ -419,6 +492,35 @@ jobs:
 
       - name: Set up Binaryen
         uses: ./.github/actions/setup-binaryen
+
+      - name: Restore Wasmer cache
+        if: matrix.wasm_profile == 'W32-WASI'
+        uses: ./.github/actions/setup-llgo-cache
+        with:
+          build-cache-mode: 'off'
+          crosscompile-cache-mode: 'off'
+          wasmer-cache-mode: readwrite
+
+      - name: Install Wasmer for W32
+        if: matrix.wasm_profile == 'W32-WASI'
+        run: bash dev/install_wasmer.sh
+      - name: Use qualified Wasmer PR 3 for this PR
+        if: github.event_name == 'pull_request' && matrix.wasm_profile == 'W32-WASI'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="$RUNNER_TEMP/wasmer-pr3"
+          gh run download 37578522115 --repo xgo-dev/wasmer \
+            --name wasmer-linux-amd64 --dir "$package"
+          (
+            cd "$package"
+            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            tar -xzf wasmer-linux-amd64.tar.gz
+            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+          )
+          chmod +x "$package/bin/wasmer"
+          "$package/bin/wasmer" --version -v
+          echo "$package/bin" >> "$GITHUB_PATH"
 
       - name: Set up Go for building LLGo and the runner
         uses: ./.github/actions/setup-go
@@ -546,30 +648,26 @@ jobs:
             (
               cd test/goroot
               max_rss_mib=4096
-              build_timeout=3m
-              if [[ "${{ matrix.wasm_profile }}" == "J32-GoJS" ]]; then
-                # Case-to-shard placement changes with the Go version and the
-                # active directive set. Detect rangegen.go from the actual
-                # selected case list instead of assuming a fixed shard.
-                case_list="$RUNNER_TEMP/goroot-cases-go${version}.txt"
-                if env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
-                  "$LLGO_GOROOT_RUNNER" \
-                  -test.run='^TestGoRootRunCases$' -test.count=1 \
-                  -goroot "$target_goroot" \
-                  -directive-mode ci \
-                  -wasm-profile "${{ matrix.wasm_profile }}" \
-                  -list-case-paths \
-                  -shard-index "$target_shard" \
-                  -shard-total "$LLGO_GOROOT_SHARD_TOTAL" \
-                  >"$case_list" 2>&1 && grep -Eq '(^|[[:space:]])rangegen\.go$' "$case_list"; then
-                  # rangegen.go's Emscripten compiler process peaks around
-                  # 7 GiB and needs more than the default per-case timeout.
-                  # Keep both allowances limited to the selected case.
-                  max_rss_mib=8192
-                  build_timeout=15m
-                fi
-                rm -f "$case_list"
+              # Case-to-shard placement changes with the Go version and the
+              # active directive set. Detect rangegen.go from the actual
+              # selected case list instead of assuming a fixed shard.
+              case_list="$RUNNER_TEMP/goroot-cases-go${version}.txt"
+              if env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
+                "$LLGO_GOROOT_RUNNER" \
+                -test.run='^TestGoRootRunCases$' -test.count=1 \
+                -goroot "$target_goroot" \
+                -directive-mode ci \
+                -wasm-profile "${{ matrix.wasm_profile }}" \
+                -list-case-paths \
+                -shard-index "$target_shard" \
+                -shard-total "$LLGO_GOROOT_SHARD_TOTAL" \
+                >"$case_list" 2>&1 && grep -Eq '(^|[[:space:]])rangegen\.go$' "$case_list"; then
+                # rangegen.go's Wasm compiler process peaks around
+                # 7 GiB. Raise the RSS cap only for shards containing it;
+                # per-case build timeouts come from llgo's test metadata.
+                max_rss_mib=8192
               fi
+              rm -f "$case_list"
               env GOMAXPROCS=2 XDG_CACHE_HOME="$cache" \
                 "$LLGO_GOROOT_RUNNER" \
                 -test.run='^TestGoRootRunCases$' -test.count=1 \
@@ -577,7 +675,6 @@ jobs:
                 -goroot "$target_goroot" \
                 -directive-mode ci \
                 -wasm-profile "${{ matrix.wasm_profile }}" \
-                -build-timeout "$build_timeout" \
                 -max-rss-mib "$max_rss_mib" \
                 -progress 60s \
                 -shard-index "$target_shard" \
@@ -609,7 +706,7 @@ jobs:
           report_dir="$RUNNER_TEMP/goroot-report"
           mkdir -p "$report_dir" "$RUNNER_TEMP/goroot-logs"
 
-          platform=js/wasm
+          platform="${{ matrix.wasm_profile }}"
 
           summarize_log() {
             local go_version=$1
@@ -630,9 +727,9 @@ jobs:
             fi
 
             report_id="${platform//\//-}-${go_version}-${actual_shard}"
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
               "$platform" "$go_version" "$actual_shard" "$selected" \
-              "$observed" "$passed" "$failed" "$skipped" \
+              "$observed" "$passed" "$failed" "$skipped" "$shard_total" \
               >"$report_dir/summary-$report_id.tsv"
             awk -F '\t' \
               -v platform="$platform" \
@@ -678,11 +775,8 @@ jobs:
 
   goroot-summary:
     name: GOROOT summary
-    if: >-
-      ${{ always() &&
-          (github.event_name != 'pull_request' ||
-           github.event.pull_request.head.ref != 'codex/split-mingw-arm64-goroot-20260923') }}
-    needs: [goroot, goroot-wasm]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success') }}
+    needs: [core-regressions, goroot, goroot-wasm]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -691,10 +785,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ inputs.llgo_ref || 'main' }}
+          ref: ${{ env.LLGO_REF }}
 
       - name: Set up Go for the report generator
         uses: ./.github/actions/setup-go
+
+      - name: Check out compatibility report checks
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
 
       - name: Download shard statistics
         continue-on-error: true
@@ -730,9 +829,17 @@ jobs:
           fi
 
           report_count=$(wc -l <"$summary_tsv" | tr -d ' ')
-          report_platforms=$(cut -f1 "$summary_tsv" | sort -u | paste -sd, -)
+          # The required platform set is independent of the received artifacts.
+          # Missing platforms must remain visible even if a matrix is narrowed.
+          report_platforms=$(python3 -c 'import sys; sys.path.insert(0, "compatibility-ci/scripts"); from check_report_coverage import GOROOT_PLATFORMS; print(",".join(GOROOT_PLATFORMS))')
           go126="$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)"
           go127="$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)"
+          coverage_md="$RUNNER_TEMP/goroot-coverage.md"
+          coverage_ok=0
+          if python3 compatibility-ci/scripts/check_report_coverage.py goroot \
+            --summary "$summary_tsv" --versions "$go126,$go127" >"$coverage_md"; then
+            coverage_ok=1
+          fi
           write_row() {
             local label=$1
             local platform=$2
@@ -766,6 +873,7 @@ jobs:
             echo
             echo "Received $report_count/$expected_reports shard reports (two Go versions per configured matrix job)."
             echo
+            cat "$coverage_md"
             echo '| Platform / toolchain | Shards | Selected | Observed | Passed | Failed | Skipped |'
             echo '|---|---:|---:|---:|---:|---:|---:|'
             IFS=, read -r -a platforms <<<"$report_platforms"
@@ -794,6 +902,7 @@ jobs:
             echo "GOROOT_REPORT=$report_md"
             echo "GOROOT_REPORT_COUNT=$report_count"
             echo "GOROOT_EXPECTED_REPORT_COUNT=$expected_reports"
+            echo "GOROOT_COVERAGE_OK=$coverage_ok"
           } >>"$GITHUB_ENV"
 
       - name: Preserve GOROOT summary report
@@ -848,6 +957,10 @@ jobs:
           GOROOT_RESULT: ${{ needs.goroot.result }}
           WASM_RESULT: ${{ needs.goroot-wasm.result }}
         run: |
+          if [[ "$GOROOT_COVERAGE_OK" != 1 ]]; then
+            echo "error: incomplete GOROOT platform/version/shard coverage" >&2
+            exit 1
+          fi
           if [[ "$GOROOT_REPORT_COUNT" -ne "$GOROOT_EXPECTED_REPORT_COUNT" ]]; then
             echo "error: expected $GOROOT_EXPECTED_REPORT_COUNT shard reports, got $GOROOT_REPORT_COUNT" >&2
             exit 1

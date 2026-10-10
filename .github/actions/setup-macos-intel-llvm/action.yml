@@ -1,0 +1,59 @@
+name: Setup Intel macOS LLVM
+description: Use the LLVM 22 toolchain shipped in LLGo's Intel macOS releases
+
+outputs:
+  go-flags:
+    value: ${{ steps.configure.outputs.go-flags }}
+  cgo-cppflags:
+    value: ${{ steps.configure.outputs.cgo-cppflags }}
+  cgo-ldflags:
+    value: ${{ steps.configure.outputs.cgo-ldflags }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v6
+      id: llvm-cache
+      with:
+        path: ${{ runner.tool_cache }}/llgo-intel-llvm/22.1.4_20260912
+        key: llgo-intel-llvm-c31d127230d87bc468e6ea5e709db20d0729ecf6407222ef33f2378e2f847416
+    - name: Install precompiled LLVM
+      if: steps.llvm-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        LLGO_INTEL_LLVM_ROOT: ${{ runner.tool_cache }}/llgo-intel-llvm/22.1.4_20260912
+      run: |
+        set -euo pipefail
+        archive="$RUNNER_TEMP/llgo-intel-llvm.tar.xz"
+        curl --fail --location --connect-timeout 20 --max-time 300 --output "$archive" \
+          https://github.com/xgo-dev/espressif-llvm-project-prebuilt/releases/download/22.1.4_20260912/clang-esp-22.1.4_20260912-x86_64-apple-darwin.tar.xz
+        echo "c31d127230d87bc468e6ea5e709db20d0729ecf6407222ef33f2378e2f847416  $archive" | shasum -a 256 --check
+        mkdir -p "$LLGO_INTEL_LLVM_ROOT"
+        tar -xJf "$archive" -C "$LLGO_INTEL_LLVM_ROOT" --strip-components=1
+    - name: Configure and verify the native toolchain
+      id: configure
+      shell: bash
+      env:
+        LLGO_INTEL_LLVM_ROOT: ${{ runner.tool_cache }}/llgo-intel-llvm/22.1.4_20260912
+      run: |
+        set -euo pipefail
+        test "$RUNNER_OS/$RUNNER_ARCH" = macOS/X64
+        llvm_bin="$LLGO_INTEL_LLVM_ROOT/bin"
+        test "$("$llvm_bin/llvm-config" --version | cut -d. -f1)" = 22
+        test "$("$llvm_bin/clang" -dumpversion | cut -d. -f1)" = 22
+        "$llvm_bin/ld.lld" --version | grep -Eq '(^|[[:space:]])22\.'
+        macos_sdk=$(xcrun --sdk macosx --show-sdk-path)
+        test -d "$macos_sdk"
+        # Match the byollvm build used by LLGo's release archives.
+        {
+          echo "SDKROOT=$macos_sdk"
+          echo "LLVM_CONFIG=$llvm_bin/llvm-config"
+        } >> "$GITHUB_ENV"
+        # Scope LLVM CGo flags to host-tool builds; guest programs and their
+        # official Go baselines must not link the compiler's LLVM library.
+        {
+          echo "go-flags=${GOFLAGS:-} -tags=byollvm"
+          echo "cgo-cppflags=${CGO_CPPFLAGS:-} -I$LLGO_INTEL_LLVM_ROOT/include -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
+          echo "cgo-ldflags=${CGO_LDFLAGS:-} -L$LLGO_INTEL_LLVM_ROOT/lib -lLLVM-22 -lz -lm -Wl,-rpath,$LLGO_INTEL_LLVM_ROOT/lib"
+        } >> "$GITHUB_OUTPUT"
+        echo "$llvm_bin" >> "$GITHUB_PATH"
