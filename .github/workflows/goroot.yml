@@ -492,19 +492,8 @@ jobs:
       - name: Set up Binaryen
         uses: ./.github/actions/setup-binaryen
 
-      - name: Restore Wasmer cache
+      - name: Install qualified Wasmer PR 3 artifact
         if: matrix.wasm_profile == 'W32-WASI'
-        uses: ./.github/actions/setup-llgo-cache
-        with:
-          build-cache-mode: 'off'
-          crosscompile-cache-mode: 'off'
-          wasmer-cache-mode: readwrite
-
-      - name: Install Wasmer for W32
-        if: matrix.wasm_profile == 'W32-WASI'
-        run: bash dev/install_wasmer.sh
-      - name: Use qualified Wasmer PR 3 for this PR
-        if: github.event_name == 'pull_request' && matrix.wasm_profile == 'W32-WASI'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

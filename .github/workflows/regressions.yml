@@ -11,7 +11,7 @@ on:
         required: true
       wasmer_pr3:
         type: boolean
-        default: false
+        default: true
   workflow_dispatch:
     inputs:
       llgo_repository:
@@ -25,7 +25,7 @@ on:
       wasmer_pr3:
         description: Use the qualified Wasmer PR 3 artifact
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
