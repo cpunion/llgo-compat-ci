@@ -247,18 +247,8 @@ jobs:
         with:
           version: '39.0.1'
       - uses: ./.github/actions/setup-go
-      - name: Restore Wasmer cache
+      - name: Install qualified Wasmer PR 3 artifact
         if: ${{ matrix.profile == 'W32-WASI' }}
-        uses: ./.github/actions/setup-llgo-cache
-        with:
-          build-cache-mode: 'off'
-          crosscompile-cache-mode: 'off'
-          wasmer-cache-mode: readwrite
-      - name: Install Wasmer for W32
-        if: ${{ matrix.profile == 'W32-WASI' }}
-        run: bash dev/install_wasmer.sh
-      - name: Use qualified Wasmer PR 3 for this PR
-        if: github.event_name == 'pull_request' && matrix.profile == 'W32-WASI'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -396,16 +386,7 @@ jobs:
         with:
           version: '39.0.1'
       - uses: ./.github/actions/setup-go
-      - name: Restore Wasmer cache
-        uses: ./.github/actions/setup-llgo-cache
-        with:
-          build-cache-mode: 'off'
-          crosscompile-cache-mode: 'off'
-          wasmer-cache-mode: readwrite
-      - name: Install Wasmer for W32
-        run: bash dev/install_wasmer.sh
-      - name: Use qualified Wasmer PR 3 for this PR
-        if: github.event_name == 'pull_request'
+      - name: Install qualified Wasmer PR 3 artifact
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
