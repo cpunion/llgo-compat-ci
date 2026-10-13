@@ -54,6 +54,13 @@ jobs:
           version: '6.0.8'
       - uses: ./.github/actions/setup-binaryen
         if: matrix.wasm_profile != ''
+      - name: Install host debugger
+        shell: bash
+        run: |
+          if ! command -v gdb >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y gdb
+          fi
       - name: Install qualified Wasmer PR 3 artifact
         if: matrix.wasm_profile == 'W32-WASI'
         env:
