@@ -48,6 +48,10 @@ jobs:
       - uses: ./.github/actions/setup-go
         with:
           architecture: ${{ startsWith(matrix.os, 'windows') && 'x64' || '' }}
+      - uses: emscripten-core/setup-emsdk@v15
+        if: matrix.wasm_profile != ''
+        with:
+          version: '6.0.8'
       - uses: ./.github/actions/setup-binaryen
         if: matrix.wasm_profile != ''
       - name: Install qualified Wasmer PR 3 artifact
@@ -75,6 +79,8 @@ jobs:
           CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
           CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
         run: |
+          clang --version
+          llvm-config --version
           LLGO_BUILD_GOROOT_RUNNER=1 dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
           echo "GO127_GOROOT=$(go env GOROOT)" >> "$GITHUB_ENV"
           suffix=
@@ -82,7 +88,21 @@ jobs:
           llgo="$RUNNER_TEMP/llgo-bin/llgo${suffix}"
           if [[ "$RUNNER_OS" == Windows ]]; then llgo="$(cygpath -w "$llgo")"; fi
           echo "LLGO_TEST_LLGO=$llgo" >> "$GITHUB_ENV"
-          echo "LLGO_GOROOT_RUNNER=$RUNNER_TEMP/llgo-bin/goroot-runner${suffix}" >> "$GITHUB_ENV"
+          {
+            echo "LLGO_GOROOT_RUNNER=$RUNNER_TEMP/llgo-bin/goroot-runner${suffix}"
+            echo "LLGO_REAL_COMPILER=$llgo"
+          } >> "$GITHUB_ENV"
+          wrapper="$RUNNER_TEMP/llgo-verbose"
+          cat > "$wrapper" <<'SH'
+          #!/usr/bin/env bash
+          if [[ "$1" == build ]]; then
+            shift
+            exec "$LLGO_REAL_COMPILER" build -v "$@" 2> >(tee -a "$RUNNER_TEMP/replay/compiler-commands.log" >&2)
+          fi
+          exec "$LLGO_REAL_COMPILER" "$@"
+          SH
+          chmod +x "$wrapper"
+          echo "LLGO_TEST_LLGO=$wrapper" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-go
         with:
           go-version: 1.26.7
