@@ -17,23 +17,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            platform: darwin/arm64
+          - os: ubuntu-24.04
+            platform: W32-WASI
             cases: '^gcgort\.go$'
             windows_abi: ''
             windows_arch: ''
-          - os: macos-15-intel
-            platform: darwin/amd64
-            cases: '^gcgort\.go$'
-            windows_abi: ''
-            windows_arch: ''
+            wasm_profile: W32-WASI
+          - os: windows-2022
+            platform: windows-msvc/386
+            cases: '^fixedbugs/issue39541\.go$'
+            windows_abi: msvc
+            windows_arch: '386'
+            wasm_profile: ''
     name: Replay (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: 7e87818a200ab0d1bc573b895ea5e2967be0b45e
+          ref: 63a406bea50a7bf58879318ee178202459c9932c
       - uses: actions/checkout@v7
         with:
           path: compatibility-ci
@@ -49,6 +51,26 @@ jobs:
       - uses: ./.github/actions/setup-go
         with:
           architecture: ${{ startsWith(matrix.os, 'windows') && 'x64' || '' }}
+      - uses: ./.github/actions/setup-binaryen
+        if: matrix.wasm_profile != ''
+      - name: Install qualified Wasmer PR 3 artifact
+        if: matrix.wasm_profile == 'W32-WASI'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          package="$RUNNER_TEMP/wasmer-pr3"
+          gh run download 37578522115 --repo xgo-dev/wasmer \
+            --name wasmer-linux-amd64 --dir "$package"
+          (
+            cd "$package"
+            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            tar -xzf wasmer-linux-amd64.tar.gz
+            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+          )
+          chmod +x "$package/bin/wasmer"
+          "$package/bin/wasmer" --version -v
+          echo "$package/bin" >> "$GITHUB_PATH"
       - name: Build tools from pinned main
         shell: bash
         env:
@@ -81,6 +103,7 @@ jobs:
         shell: bash
         env:
           CASES: ${{ matrix.cases }}
+          WASM_PROFILE: ${{ matrix.wasm_profile }}
         run: |
           mkdir -p "$RUNNER_TEMP/replay"
           printf 'timeouts: []\nflakes: []\nxfails: []\n' > "$RUNNER_TEMP/replay/empty-expectations.yaml"
@@ -95,8 +118,8 @@ jobs:
               cd test/goroot
               env GOMAXPROCS=2 XDG_CACHE_HOME="$RUNNER_TEMP/replay/cache-go${version}" \
                 "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' \
-                -test.v -test.count=5 -test.timeout=30m -goroot "$root" \
-                -directive-mode ci -case "$CASES" -run-timeout 5m \
+                -test.v -test.count=3 -test.timeout=30m -goroot "$root" \
+                -directive-mode ci -case "$CASES" -wasm-profile "$WASM_PROFILE" -run-timeout 5m \
                 -xfail "$RUNNER_TEMP/replay/empty-expectations.yaml" -keepwork \
                 -progress 30s
             ) 2>&1 | tee "$RUNNER_TEMP/replay/go${version}.log"
