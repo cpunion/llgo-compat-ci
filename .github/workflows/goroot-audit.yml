@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: 0f293537d4e6b80282ee3bc432600f8ea005482e
+          ref: e1f004ad43de91539cc16194a4f329f56e47ff28
       - uses: actions/checkout@v7
         with:
           path: compatibility-ci
@@ -97,7 +97,7 @@ jobs:
           #!/usr/bin/env bash
           if [[ "$1" == build ]]; then
             shift
-            exec "$LLGO_REAL_COMPILER" build -v -compiler-verbose -gen-llfiles "$@" 2> >(tee -a "$RUNNER_TEMP/replay/compiler-commands.log" >&2)
+            exec "$LLGO_REAL_COMPILER" build -v -compiler-verbose "$@" 2> >(tee -a "$RUNNER_TEMP/replay/compiler-commands.log" >&2)
           fi
           exec "$LLGO_REAL_COMPILER" "$@"
           SH
@@ -126,9 +126,9 @@ jobs:
           export TMPDIR="$RUNNER_TEMP/replay/work" TEMP="$RUNNER_TEMP/replay/work" TMP="$RUNNER_TEMP/replay/work"
           printf 'timeouts: []\nflakes: []\nxfails: []\n' > "$RUNNER_TEMP/replay/empty-expectations.yaml"
           export LLGO_ROOT="$GITHUB_WORKSPACE"
-          export LLGO_STDIO_NOBUF=1
+          if [[ "$RUNNER_OS" == Windows ]]; then export LLGO_STDIO_NOBUF=1; fi
           status=0
-          for version in 127; do
+          for version in 126 127; do
             root_var="GO${version}_GOROOT"
             root="${!root_var}"
             set +e
@@ -136,7 +136,7 @@ jobs:
               cd test/goroot
               env GOMAXPROCS=2 XDG_CACHE_HOME="$RUNNER_TEMP/replay/cache-go${version}" \
                 "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' \
-                -test.v -test.count=1 -test.timeout=30m -goroot "$root" \
+                -test.v -test.count=3 -test.timeout=30m -goroot "$root" \
                 -directive-mode ci -case "$CASES" -wasm-profile "$WASM_PROFILE" -run-timeout 5m \
                 -xfail "$RUNNER_TEMP/replay/empty-expectations.yaml" -keepwork \
                 -progress 30s
