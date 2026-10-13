@@ -154,7 +154,7 @@ jobs:
               cd test/goroot
               env GOMAXPROCS=2 XDG_CACHE_HOME="$RUNNER_TEMP/replay/cache-go${version}" \
                 "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' \
-                -test.v -test.count=1 -test.timeout=30m -goroot "$root" \
+                -test.v -test.count=8 -test.timeout=30m -goroot "$root" \
                 -directive-mode ci -case "$CASES" -wasm-profile "$WASM_PROFILE" -run-timeout 3m \
                 -xfail "$RUNNER_TEMP/replay/empty-expectations.yaml" -keepwork \
                 -progress 30s
