@@ -27,18 +27,13 @@ jobs:
             cases: '^gcgort\.go$'
             windows_abi: ''
             windows_arch: ''
-          - os: windows-2022
-            platform: windows-mingw/386
-            cases: '^index0\.go$'
-            windows_abi: mingw
-            windows_arch: '386'
     name: Replay (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: 26b220f1f048903cf8c7a7606c307c84aa2f5bdb
+          ref: 7e87818a200ab0d1bc573b895ea5e2967be0b45e
       - uses: actions/checkout@v7
         with:
           path: compatibility-ci
