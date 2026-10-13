@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: 63a406bea50a7bf58879318ee178202459c9932c
+          ref: 0f293537d4e6b80282ee3bc432600f8ea005482e
       - uses: actions/checkout@v7
         with:
           path: compatibility-ci
