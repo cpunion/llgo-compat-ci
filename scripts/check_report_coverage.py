@@ -57,10 +57,15 @@ def check_goroot(summary, versions):
                 if len(row) != 9:
                     raise ValueError("expected nine TSV columns, including shard total")
                 platform, version = row[:2]
-                index, selected, observed, passed, failed, skipped, total = map(int, row[2:])
                 key = (platform, version)
                 if key not in expected:
                     raise ValueError(f"unexpected platform/version {platform} Go {version}")
+                if row[3] == "?":
+                    raise ValueError(
+                        f"{platform} · Go {version} · shard {row[2]}/{row[8]}: "
+                        "case selection was not reached; inspect the setup/run failure"
+                    )
+                index, selected, observed, passed, failed, skipped, total = map(int, row[2:])
                 groups[key].append((index, total))
                 if min(selected, observed, passed, failed, skipped) < 0:
                     raise ValueError("negative case count")
