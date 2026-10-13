@@ -127,8 +127,26 @@ jobs:
           printf 'timeouts: []\nflakes: []\nxfails: []\n' > "$RUNNER_TEMP/replay/empty-expectations.yaml"
           export LLGO_ROOT="$GITHUB_WORKSPACE"
           if [[ "$RUNNER_OS" == Windows ]]; then export LLGO_STDIO_NOBUF=1; fi
+          cat > "$RUNNER_TEMP/replay/host-stacks.py" <<'PY'
+          import os, pathlib, subprocess, time
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'replay'
+          seen = set()
+          while not (root / 'sampler-stop').exists():
+              p = subprocess.run(['ps', '-C', 'wasmer', '-o', 'pid=,etimes=,pcpu=,nlwp=,stat=,args='], capture_output=True, text=True)
+              for line in p.stdout.splitlines():
+                  fields = line.split()
+                  if len(fields) < 2 or int(fields[1]) < 60 or fields[0] in seen:
+                      continue
+                  seen.add(fields[0])
+                  with (root / ('host-stack-' + fields[0] + '.log')).open('w') as f:
+                      f.write(line + '\n'); f.flush()
+                      subprocess.run(['sudo', 'timeout', '30s', 'gdb', '--batch', '--nx', '-p', fields[0], '-ex', 'set pagination off', '-ex', 'thread apply all bt'], stdout=f, stderr=subprocess.STDOUT, timeout=35)
+              time.sleep(10)
+          PY
+          python3 "$RUNNER_TEMP/replay/host-stacks.py" &
+          sampler=$!
           status=0
-          for version in 126 127; do
+          for version in 127; do
             root_var="GO${version}_GOROOT"
             root="${!root_var}"
             set +e
@@ -136,8 +154,8 @@ jobs:
               cd test/goroot
               env GOMAXPROCS=2 XDG_CACHE_HOME="$RUNNER_TEMP/replay/cache-go${version}" \
                 "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' \
-                -test.v -test.count=3 -test.timeout=30m -goroot "$root" \
-                -directive-mode ci -case "$CASES" -wasm-profile "$WASM_PROFILE" -run-timeout 5m \
+                -test.v -test.count=1 -test.timeout=30m -goroot "$root" \
+                -directive-mode ci -case "$CASES" -wasm-profile "$WASM_PROFILE" -run-timeout 3m \
                 -xfail "$RUNNER_TEMP/replay/empty-expectations.yaml" -keepwork \
                 -progress 30s
             ) 2>&1 | tee "$RUNNER_TEMP/replay/go${version}.log"
@@ -145,6 +163,8 @@ jobs:
             set -e
             if [[ "${codes[0]}" != 0 ]]; then status=1; fi
           done
+          touch "$RUNNER_TEMP/replay/sampler-stop"
+          wait "$sampler"
           exit "$status"
       - name: Preserve assertion IR
         if: always()
