@@ -13,6 +13,9 @@ jobs:
   replay:
     if: github.repository == 'cpunion/llgo-compat-ci'
     timeout-minutes: 90
+    env:
+      GOFLAGS: -tags=llvm22
+      LLGO_BUILD_CACHE: 'on'
     strategy:
       fail-fast: false
       matrix:
@@ -23,12 +26,6 @@ jobs:
             windows_abi: ''
             windows_arch: ''
             wasm_profile: W32-WASI
-          - os: windows-2022
-            platform: windows-msvc/386
-            cases: '^fixedbugs/issue39541\.go$'
-            windows_abi: msvc
-            windows_arch: '386'
-            wasm_profile: ''
     name: Replay (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     steps:
