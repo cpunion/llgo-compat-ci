@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: cpunion/llgo
-          ref: f72d34ea810666ea3df77b8f278a539d78bcd199
+          ref: e02fbf01498fe90016820367056063189a495ad3
       - uses: actions/checkout@v7
         with:
           path: compatibility-ci
