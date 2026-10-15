@@ -89,6 +89,11 @@ jobs:
           CASES: ${{ matrix.cases }}
         run: |
           mkdir -p "$RUNNER_TEMP/replay"
+          clang -dynamiclib -undefined dynamic_lookup \
+            compatibility-ci/.github/diagnostics/thread-create-trace.c \
+            -o "$RUNNER_TEMP/replay/trace.dylib"
+          ulimit -a
+          sysctl kern.num_taskthreads kern.num_threads kern.maxprocperuid hw.memsize || true
           printf 'timeouts: []\nflakes: []\nxfails: []\n' > "$RUNNER_TEMP/replay/empty-expectations.yaml"
           export LLGO_ROOT="$GITHUB_WORKSPACE"
           export LLGO_STDIO_NOBUF=1
@@ -96,6 +101,19 @@ jobs:
           for version in 126 127; do
             root_var="GO${version}_GOROOT"
             root="${!root_var}"
+            env GOROOT="$root" PATH="$root/bin:$PATH" \
+              "$LLGO_TEST_LLGO" build -o "$RUNNER_TEMP/replay/gcgort-go${version}" \
+              "$root/test/gcgort.go"
+            for retries in 0 20; do
+              set +e
+              env DYLD_INSERT_LIBRARIES="$RUNNER_TEMP/replay/trace.dylib" \
+                LLGO_TRACE_CREATE_RETRIES="$retries" \
+                "$RUNNER_TEMP/replay/gcgort-go${version}" \
+                2>&1 | tee "$RUNNER_TEMP/replay/trace-go${version}-retries${retries}.log"
+              codes=("${PIPESTATUS[@]}")
+              set -e
+              echo "Native execution Go${version}, retries=${retries}: ${codes[0]}"
+            done
             set +e
             (
               cd test/goroot
@@ -117,3 +135,53 @@ jobs:
         with:
           name: replay-${{ matrix.os }}
           path: ${{ runner.temp }}/replay/*.log
+
+  cleanup:
+    if: github.repository == 'cpunion/llgo-compat-ci'
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: cpunion/llgo
+          ref: 7396beb65122d107a25272675c7da04deee9cb85
+      - uses: ./.github/actions/setup-deps
+        with:
+          windows-abi: msvc
+          windows-arch: arm64
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          architecture: arm64
+      - name: Build the unchanged compiler
+        shell: bash
+        run: |
+          dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
+          echo "LLGO_ROOT=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/activate-windows-target
+        with:
+          windows-abi: msvc
+          windows-arch: arm64
+      - name: Repeat the original cleanup test with coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LLGO_STDIO_NOBUF=1
+          export LLGO_BUILD_CACHE=1
+          mkdir -p "$RUNNER_TEMP/cleanup"
+          cd test
+          "$RUNNER_TEMP/llgo-bin/llgo.exe" test -c \
+            -coverpkg=github.com/xgo-dev/llgo/test/... \
+            -o "$RUNNER_TEMP/cleanup/runtime.test.exe" ./std/runtime
+          "$RUNNER_TEMP/cleanup/runtime.test.exe" -test.v -test.count=50 \
+            -test.timeout=10m 2>&1 | tee "$RUNNER_TEMP/cleanup/repeated.log"
+          for attempt in {1..20}; do
+            "$RUNNER_TEMP/cleanup/runtime.test.exe" -test.v \
+              -test.run='^TestCleanupDoesNotBlockCollector$' -test.timeout=30s \
+              2>&1 | tee "$RUNNER_TEMP/cleanup/fresh-${attempt}.log"
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-arm64-cleanup
+          path: ${{ runner.temp }}/cleanup/*.log
