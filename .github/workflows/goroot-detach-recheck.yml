@@ -1,0 +1,119 @@
+name: Darwin detached thread recheck
+
+on:
+  push:
+    branches: [codex/darwin-detach-recheck-20261015]
+    paths: [.github/workflows/goroot-detach-recheck.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    if: github.repository == 'cpunion/llgo-compat-ci'
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: darwin/arm64
+            cases: '^gcgort\.go$'
+            windows_abi: ''
+            windows_arch: ''
+          - os: macos-15-intel
+            platform: darwin/amd64
+            cases: '^gcgort\.go$'
+            windows_abi: ''
+            windows_arch: ''
+    name: Replay (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: cpunion/llgo
+          ref: a2f6f29089a64ee9a9d6ec90ba6e569377b665e6
+      - uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
+        if: matrix.platform == 'darwin/amd64'
+      - uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+          install-llvm: ${{ matrix.platform != 'darwin/amd64' }}
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          architecture: ${{ startsWith(matrix.os, 'windows') && 'x64' || '' }}
+      - name: Build tools from the pinned thread fix
+        shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
+        run: |
+          LLGO_BUILD_GOROOT_RUNNER=1 dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
+          echo "GO127_GOROOT=$(go env GOROOT)" >> "$GITHUB_ENV"
+          suffix=
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
+          llgo="$RUNNER_TEMP/llgo-bin/llgo${suffix}"
+          if [[ "$RUNNER_OS" == Windows ]]; then llgo="$(cygpath -w "$llgo")"; fi
+          echo "LLGO_TEST_LLGO=$llgo" >> "$GITHUB_ENV"
+          echo "LLGO_GOROOT_RUNNER=$RUNNER_TEMP/llgo-bin/goroot-runner${suffix}" >> "$GITHUB_ENV"
+      - name: Verify native detached thread state
+        shell: bash
+        run: |
+          export LLGO_ROOT="$GITHUB_WORKSPACE"
+          (cd runtime && "$LLGO_TEST_LLGO" test -v -timeout=2m -run '^Test(KeyNativeLayout|CreateDetachedThreadState)$' ./internal/thread)
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.7
+          architecture: ${{ startsWith(matrix.os, 'windows') && 'x64' || '' }}
+          cache: false
+      - name: Record Go 1.26 GOROOT
+        shell: bash
+        run: echo "GO126_GOROOT=$(go env GOROOT)" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/activate-windows-target
+        if: runner.os == 'Windows'
+        with:
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+      - name: Replay both versions without corpus changes
+        shell: bash
+        env:
+          CASES: ${{ matrix.cases }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/replay"
+          printf 'timeouts: []\nflakes: []\nxfails: []\n' > "$RUNNER_TEMP/replay/empty-expectations.yaml"
+          export LLGO_ROOT="$GITHUB_WORKSPACE"
+          export LLGO_STDIO_NOBUF=1
+          status=0
+          for version in 126 127; do
+            root_var="GO${version}_GOROOT"
+            root="${!root_var}"
+            set +e
+            (
+              cd test/goroot
+              env GOMAXPROCS=2 XDG_CACHE_HOME="$RUNNER_TEMP/replay/cache-go${version}" \
+                "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' \
+                -test.v -test.count=5 -test.timeout=30m -goroot "$root" \
+                -directive-mode ci -case "$CASES" -run-timeout 5m \
+                -xfail "$RUNNER_TEMP/replay/empty-expectations.yaml" -keepwork \
+                -progress 30s
+            ) 2>&1 | tee "$RUNNER_TEMP/replay/go${version}.log"
+            codes=("${PIPESTATUS[@]}")
+            set -e
+            if [[ "${codes[0]}" != 0 ]]; then status=1; fi
+          done
+          exit "$status"
+      - name: Preserve replay logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: replay-${{ matrix.os }}
+          path: ${{ runner.temp }}/replay/*.log
