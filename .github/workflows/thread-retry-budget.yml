@@ -1,0 +1,124 @@
+name: Native thread retry budget experiment
+
+on:
+  push:
+    branches: [codex/darwin-detach-recheck-20261015]
+    paths: [.github/workflows/thread-retry-budget.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    if: github.repository == 'cpunion/llgo-compat-ci'
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            platform: darwin/amd64
+            cases: '^gcgort\.go$'
+            windows_abi: ''
+            windows_arch: ''
+    name: Replay (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: cpunion/llgo
+          ref: 639f50b4bd7156796d5a22315f3af17533b45e14
+      - uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
+        if: matrix.platform == 'darwin/amd64'
+      - uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+          install-llvm: ${{ matrix.platform != 'darwin/amd64' }}
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          architecture: ${{ startsWith(matrix.os, 'windows') && 'x64' || '' }}
+      - name: Build tools from the pinned thread fix
+        shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
+        run: |
+          LLGO_BUILD_GOROOT_RUNNER=1 dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
+          echo "GO127_GOROOT=$(go env GOROOT)" >> "$GITHUB_ENV"
+          suffix=
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
+          llgo="$RUNNER_TEMP/llgo-bin/llgo${suffix}"
+          if [[ "$RUNNER_OS" == Windows ]]; then llgo="$(cygpath -w "$llgo")"; fi
+          echo "LLGO_TEST_LLGO=$llgo" >> "$GITHUB_ENV"
+          echo "LLGO_GOROOT_RUNNER=$RUNNER_TEMP/llgo-bin/goroot-runner${suffix}" >> "$GITHUB_ENV"
+      - name: Verify native detached thread state
+        shell: bash
+        run: |
+          export LLGO_ROOT="$GITHUB_WORKSPACE"
+          (cd runtime && "$LLGO_TEST_LLGO" test -v -timeout=2m -run '^Test(KeyNativeLayout|DetachedStateNativeValue)$' ./internal/thread)
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.7
+          architecture: ${{ startsWith(matrix.os, 'windows') && 'x64' || '' }}
+          cache: false
+      - name: Record Go 1.26 GOROOT
+        shell: bash
+        run: echo "GO126_GOROOT=$(go env GOROOT)" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/activate-windows-target
+        if: runner.os == 'Windows'
+        with:
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+      - name: Replay both versions without corpus changes
+        shell: bash
+        env:
+          CASES: ${{ matrix.cases }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/replay"
+          clang -dynamiclib -undefined dynamic_lookup \
+            compatibility-ci/.github/diagnostics/thread-create-trace.c \
+            -o "$RUNNER_TEMP/replay/trace.dylib"
+          ulimit -a
+          sysctl kern.num_taskthreads kern.num_threads kern.maxprocperuid hw.memsize || true
+          printf 'timeouts: []\nflakes: []\nxfails: []\n' > "$RUNNER_TEMP/replay/empty-expectations.yaml"
+          export LLGO_ROOT="$GITHUB_WORKSPACE"
+          export LLGO_STDIO_NOBUF=1
+          status=0
+          for version in 126 127; do
+            root_var="GO${version}_GOROOT"
+            root="${!root_var}"
+            env GOROOT="$root" PATH="$root/bin:$PATH" \
+              GO111MODULE=off GOWORK=off GOTOOLCHAIN=local \
+              "$LLGO_TEST_LLGO" build -o "$RUNNER_TEMP/replay/gcgort-go${version}" \
+              "$root/test/gcgort.go"
+            for retries in 40 100; do
+              for iteration in {1..5}; do
+                set +e
+                env DYLD_INSERT_LIBRARIES="$RUNNER_TEMP/replay/trace.dylib" \
+                  LLGO_TRACE_CREATE_RETRIES="$retries" \
+                  "$RUNNER_TEMP/replay/gcgort-go${version}" \
+                  2>&1 | tee "$RUNNER_TEMP/replay/trace-go${version}-retries${retries}-${iteration}.log"
+                codes=("${PIPESTATUS[@]}")
+                set -e
+                echo "Native execution Go${version}, retries=${retries}, iteration=${iteration}: ${codes[0]}"
+                if [[ "$retries" == 100 && "${codes[0]}" != 0 ]]; then status=1; fi
+              done
+            done
+          done
+          exit "$status"
+      - name: Preserve replay logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: replay-${{ matrix.os }}
+          path: ${{ runner.temp }}/replay/*.log
+

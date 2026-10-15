@@ -60,7 +60,8 @@ static int trace_create(pthread_t *thread, const pthread_attr_t *attr,
     }
     if (result != EAGAIN || retry >= retries)
       return result;
-    usleep((retry + 1) * 1000);
+    int delay = retry < 20 ? retry + 1 : 20;
+    usleep(delay * 1000);
   }
 }
 
