@@ -106,14 +106,16 @@ jobs:
               "$LLGO_TEST_LLGO" build -o "$RUNNER_TEMP/replay/gcgort-go${version}" \
               "$root/test/gcgort.go"
             for retries in 0 20; do
-              set +e
-              env DYLD_INSERT_LIBRARIES="$RUNNER_TEMP/replay/trace.dylib" \
-                LLGO_TRACE_CREATE_RETRIES="$retries" \
-                "$RUNNER_TEMP/replay/gcgort-go${version}" \
-                2>&1 | tee "$RUNNER_TEMP/replay/trace-go${version}-retries${retries}.log"
-              codes=("${PIPESTATUS[@]}")
-              set -e
-              echo "Native execution Go${version}, retries=${retries}: ${codes[0]}"
+              for iteration in {1..5}; do
+                set +e
+                env DYLD_INSERT_LIBRARIES="$RUNNER_TEMP/replay/trace.dylib" \
+                  LLGO_TRACE_CREATE_RETRIES="$retries" \
+                  "$RUNNER_TEMP/replay/gcgort-go${version}" \
+                  2>&1 | tee "$RUNNER_TEMP/replay/trace-go${version}-retries${retries}-${iteration}.log"
+                codes=("${PIPESTATUS[@]}")
+                set -e
+                echo "Native execution Go${version}, retries=${retries}, iteration=${iteration}: ${codes[0]}"
+              done
             done
             set +e
             (
