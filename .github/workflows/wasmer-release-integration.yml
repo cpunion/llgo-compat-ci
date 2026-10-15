@@ -1,0 +1,234 @@
+name: Wasmer patch integration
+on:
+  push:
+    branches: [codex/wasmer-release-integration-20261015]
+    paths: [.github/workflows/wasmer-release-integration.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+env:
+  LLGO_REF: a4fe6fd5cf0b1ff019e3c66d4b935f45d5c7b2f9
+jobs:
+  wasi:
+    if: github.repository == 'cpunion/llgo-compat-ci'
+    name: WASI release / Go 1.26.7 and 1.27.0
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GOPROXY: https://proxy.golang.org,direct
+      GOFLAGS: -tags=llvm22
+      LLGO_BUILD_CACHE: 'on'
+      LLGO_GOROOT_SHARD_TOTAL: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        wasm_profile: [W32-WASI]
+        shard-index: ['0']
+    steps:
+      - name: Record expected matrix reports
+        id: report-count
+        shell: bash
+        env:
+          MATRIX_JOB_TOTAL: ${{ strategy.job-total }}
+        run: echo "count=$((MATRIX_JOB_TOTAL * 2))" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: xgo-dev/llgo
+          ref: ${{ env.LLGO_REF }}
+
+      - name: Resolve target Go versions
+        id: target-go
+        shell: bash
+        run: |
+          source dev/go_toolchain.sh
+          echo "go126=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)" >> "$GITHUB_OUTPUT"
+          echo "go127=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+
+      - name: Set up Emscripten
+        id: emsdk
+        continue-on-error: true
+        uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: '6.0.8'
+
+      # SDK downloads occasionally return HTTP 500. A second failed attempt
+      # still fails the job and leaves the unexecuted shard visible in reports.
+      - name: Retry Emscripten setup
+        if: ${{ !cancelled() && steps.emsdk.outcome == 'failure' }}
+        uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: '6.0.8'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Set up Binaryen
+        uses: ./.github/actions/setup-binaryen
+
+      - name: Restore Wasmer cache
+        if: matrix.wasm_profile == 'W32-WASI'
+        uses: ./.github/actions/setup-llgo-cache
+        with:
+          build-cache-mode: 'off'
+          crosscompile-cache-mode: 'off'
+          wasmer-cache-mode: readwrite
+
+      - name: Install Wasmer for W32
+        if: matrix.wasm_profile == 'W32-WASI'
+        run: bash dev/install_wasmer.sh
+      - name: Install Wasmer llgo-v7.5.0.2
+        if: matrix.wasm_profile == 'W32-WASI'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          package="$RUNNER_TEMP/wasmer-llgo-v7.5.0.2"
+          gh release download llgo-v7.5.0.2 --repo xgo-dev/wasmer \
+            --pattern wasmer-linux-amd64.tar.gz --dir "$package"
+          (
+            cd "$package"
+            echo '7878597d48f7e2435b8da1f43e11499fc3073dc0191a6c74c00c27f33849f179  wasmer-linux-amd64.tar.gz' | sha256sum --check
+            tar -xzf wasmer-linux-amd64.tar.gz
+            test "$(cat REVISION)" = "7692163d5f320ba0d475b2f848f36c1e1bcbdd57"
+          )
+          chmod +x "$package/bin/wasmer"
+          "$package/bin/wasmer" --version -v
+          echo "$package/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Go for building LLGo and the runner
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+
+      - name: Build LLGo and the GOROOT runner
+        id: build-tools
+        shell: bash
+        run: |
+          LLGO_BUILD_GOROOT_RUNNER=1 dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
+
+          build_version="$(go env GOVERSION)"
+          build_version="${build_version#go}"
+          echo "go-version=$build_version" >> "$GITHUB_OUTPUT"
+          echo "goroot=$(go env GOROOT)" >> "$GITHUB_OUTPUT"
+          echo "LLGO_BUILD_GO_VERSION=$build_version" >> "$GITHUB_ENV"
+
+          runner="$RUNNER_TEMP/llgo-bin/goroot-runner"
+          llgo="$RUNNER_TEMP/llgo-bin/llgo"
+          echo "LLGO_GOROOT_RUNNER=$runner" >> "$GITHUB_ENV"
+          echo "LLGO_TEST_LLGO=$llgo" >> "$GITHUB_ENV"
+
+      - name: Set up target Go 1.26
+        if: steps.target-go.outputs.go126 != steps.build-tools.outputs.go-version
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.target-go.outputs.go126 }}
+          cache: false
+
+      - name: Select Go 1.26 GOROOT
+        id: go126
+        shell: bash
+        env:
+          BUILD_GOROOT: ${{ steps.build-tools.outputs.goroot }}
+          BUILD_VERSION: ${{ steps.build-tools.outputs.go-version }}
+          TARGET_VERSION: ${{ steps.target-go.outputs.go126 }}
+        run: |
+          target_goroot="$(go env GOROOT)"
+          if [[ "$TARGET_VERSION" == "$BUILD_VERSION" ]]; then
+            target_goroot="$BUILD_GOROOT"
+          fi
+          if [[ ! -d "$target_goroot/test" ]]; then
+            echo "Target Go distribution does not contain GOROOT/test: $target_goroot" >&2
+            exit 1
+          fi
+          echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "goroot=$target_goroot" >> "$GITHUB_OUTPUT"
+
+      - name: Set up target Go 1.27
+        if: steps.target-go.outputs.go127 != steps.build-tools.outputs.go-version
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.target-go.outputs.go127 }}
+          cache: false
+
+      - name: Select Go 1.27 GOROOT
+        id: go127
+        shell: bash
+        env:
+          BUILD_GOROOT: ${{ steps.build-tools.outputs.goroot }}
+          BUILD_VERSION: ${{ steps.build-tools.outputs.go-version }}
+          TARGET_VERSION: ${{ steps.target-go.outputs.go127 }}
+        run: |
+          target_goroot="$(go env GOROOT)"
+          if [[ "$TARGET_VERSION" == "$BUILD_VERSION" ]]; then
+            target_goroot="$BUILD_GOROOT"
+          fi
+          if [[ ! -d "$target_goroot/test" ]]; then
+            echo "Target Go distribution does not contain GOROOT/test: $target_goroot" >&2
+            exit 1
+          fi
+          echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "goroot=$target_goroot" >> "$GITHUB_OUTPUT"
+
+      - name: Show toolchain versions
+        shell: bash
+        env:
+          GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
+          GO127_GOROOT: ${{ steps.go127.outputs.goroot }}
+        run: |
+          echo "LLGo build toolchain: $LLGO_BUILD_GO_VERSION"
+          "$GO126_GOROOT/bin/go" version
+          "$GO127_GOROOT/bin/go" version
+          go env GOPROXY GOMODCACHE
+          clang --version
+          emcc --version
+          node --version
+          wasm-opt --version
+
+      - name: Replay both original regression cases with default pool settings
+        shell: bash
+        env:
+          GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
+          GO127_GOROOT: ${{ steps.go127.outputs.goroot }}
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/replay"
+          printf 'timeouts: []\nflakes: []\nxfails: []\n' > "$RUNNER_TEMP/replay/empty-expectations.yaml"
+          export LLGO_ROOT="$PWD"
+          unset RAYON_NUM_THREADS
+          wasmer --version -v
+          for name in $(compgen -e); do
+            case "$name" in GITHUB_*|ACTIONS_*) unset "$name" ;; esac
+          done
+          status=0
+          for version in 126 127; do
+            root_var="GO${version}_GOROOT"
+            target_goroot="${!root_var}"
+            set +e
+            (
+              cd test/goroot
+              "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' \
+                -test.v -test.count=5 -test.timeout=20m -goroot "$target_goroot" \
+                -llgo "$LLGO_TEST_LLGO" -wasm-profile W32-WASI \
+                -directive-mode ci -case '^(gcstring|gcgort)\.go$' -run-timeout 1m \
+                -xfail "$RUNNER_TEMP/replay/empty-expectations.yaml" -keepwork -progress 30s
+            ) 2>&1 | tee "$RUNNER_TEMP/replay/go${version}.log"
+            codes=("${PIPESTATUS[@]}")
+            set -e
+            if [[ "${codes[0]}" != 0 ]]; then status=1; fi
+          done
+          exit "$status"
+      - name: Preserve qualification logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasmer-patch-integration-linux
+          path: ${{ runner.temp }}/replay/*.log
