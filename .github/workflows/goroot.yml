@@ -43,7 +43,7 @@ jobs:
     with:
       llgo_repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
       llgo_ref: ${{ inputs.llgo_ref || 'main' }}
-      wasmer_pr3: true
+      wasmer_release: true
 
   goroot-matrix:
     name: GOROOT matrix
@@ -92,6 +92,14 @@ jobs:
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
           ref: ${{ env.LLGO_REF }}
+
+      - name: Resolve target Go versions
+        id: target-go
+        shell: bash
+        run: |
+          source dev/go_toolchain.sh
+          echo "go126=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)" >> "$GITHUB_OUTPUT"
+          echo "go127=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)" >> "$GITHUB_OUTPUT"
 
       - name: Check out Intel LLVM setup
         if: matrix.platform == 'darwin/amd64'
@@ -144,14 +152,6 @@ jobs:
           fi
           echo "LLGO_GOROOT_RUNNER=$runner" >> "$GITHUB_ENV"
           echo "LLGO_TEST_LLGO=$llgo" >> "$GITHUB_ENV"
-
-      - name: Resolve target Go versions
-        id: target-go
-        shell: bash
-        run: |
-          source dev/go_toolchain.sh
-          echo "go126=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)" >> "$GITHUB_OUTPUT"
-          echo "go127=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)" >> "$GITHUB_OUTPUT"
 
       # The toolchain module downloaded through GOTOOLCHAIN omits GOROOT/test.
       # Install the complete distribution after building LLGo and the runner,
@@ -302,15 +302,18 @@ jobs:
           status=0
           serial_versions=0
           max_rss_mib=4096
-          # Isolate large generated builds and Windows reflection stress from
-          # their paired compiler. Intel macOS rangegen also exceeds 4 GiB.
+          # Isolate large generated builds and runtime stress from the paired
+          # compiler. Intel channel stress can exceed its unchanged deadline
+          # under paired load; only rangegen needs a larger memory budget.
           serial_cases=
           if [[ "$RUNNER_OS" == "Windows" ]] && {
             [[ "${{ matrix.windows_arch }}" == "amd64" ]] || [[ "${{ matrix.windows_arch }}" == "arm64" ]]
           }; then
             serial_cases='(^|[[:space:]])(rangegen\.go|fixedbugs/issue39541\.go)$'
+          elif [[ "$RUNNER_OS" == "Windows" && "${{ matrix.windows_arch }}" == "386" ]]; then
+            serial_cases='(^|[[:space:]])(index0\.go|cmplxdivide\.go|fixedbugs/issue39541\.go)$'
           elif [[ "${{ matrix.platform }}" == "darwin/amd64" ]]; then
-            serial_cases='(^|[[:space:]])rangegen\.go$'
+            serial_cases='(^|[[:space:]])(rangegen\.go|ken/chan\.go)$'
           fi
           if [[ -n "$serial_cases" ]]; then
             for selection in "${{ steps.go126.outputs.version }}:$shard_index" "${{ steps.go127.outputs.version }}:$paired_shard_index"; do
@@ -330,7 +333,10 @@ jobs:
               if grep -Eq "$serial_cases" "$case_list"; then
                 echo "Serializing Go versions for resource-heavy cases in Go $version shard $target_shard/$LLGO_GOROOT_SHARD_TOTAL"
                 serial_versions=1
-                if [[ "${{ matrix.platform }}" == "darwin/amd64" ]]; then max_rss_mib=8192; fi
+                if [[ "${{ matrix.platform }}" == "darwin/amd64" ]] &&
+                  grep -Eq '(^|[[:space:]])rangegen\.go$' "$case_list"; then
+                  max_rss_mib=8192
+                fi
               fi
               rm -f "$case_list"
             done
@@ -361,8 +367,8 @@ jobs:
         env:
           TARGET_PLATFORM: ${{ matrix.platform }}
           SHARD_INDEX: ${{ matrix.shard-index }}
-          GO126_VERSION: ${{ steps.go126.outputs.version }}
-          GO127_VERSION: ${{ steps.go127.outputs.version }}
+          GO126_VERSION: ${{ steps.go126.outputs.version || steps.target-go.outputs.go126 || '1.26' }}
+          GO127_VERSION: ${{ steps.go127.outputs.version || steps.target-go.outputs.go127 || '1.27' }}
         run: |
           report_dir="$RUNNER_TEMP/goroot-report"
           mkdir -p "$report_dir" "$RUNNER_TEMP/goroot-logs"
@@ -370,13 +376,13 @@ jobs:
           platform="$TARGET_PLATFORM"
 
           summarize_log() {
-            local go_version=$1
+            local go_version=$1 fallback_shard=$2
             local log="$RUNNER_TEMP/goroot-logs/go${go_version}.log"
             local selected observed failed skipped passed report_id shard_info actual_shard shard_total
             touch "$log"
             shard_info=$(sed -nE 's/.* shard=([0-9]+)\/([0-9]+) cases=.*/\1 \2/p' "$log" | tail -1)
             read -r actual_shard shard_total <<<"$shard_info"
-            actual_shard=${actual_shard:-$SHARD_INDEX}
+            actual_shard=${actual_shard:-$fallback_shard}
             shard_total=${shard_total:-$LLGO_GOROOT_SHARD_TOTAL}
             selected=$(sed -nE 's/.* shard=[^ ]+ cases=([0-9]+) directive_mode=.*/\1/p' "$log" | tail -1)
             observed=$(grep -Ec -- '--- (PASS|FAIL|SKIP): TestGoRootRunCases/' "$log" || true)
@@ -410,7 +416,10 @@ jobs:
             echo '_Passed means the runner classification succeeded; expected xfail/not-applicable failures and classified flakes are counted as Passed._'
             echo
             echo '**Failed case paths**'
-            if [[ "$failed" -eq 0 ]]; then
+            if [[ "$selected" == '?' ]]; then
+              echo
+              echo '- Case selection was not reached; inspect the setup/run failure above.'
+            elif [[ "$failed" -eq 0 ]]; then
               echo
               echo '- none'
             else
@@ -420,9 +429,10 @@ jobs:
           }
 
           {
-            summarize_log "$GO126_VERSION"
+            summarize_log "$GO126_VERSION" "$SHARD_INDEX"
             echo
-            summarize_log "$GO127_VERSION"
+            paired_shard=$(((SHARD_INDEX + LLGO_GOROOT_SHARD_TOTAL / 2) % LLGO_GOROOT_SHARD_TOTAL))
+            summarize_log "$GO127_VERSION" "$paired_shard"
           } >>"$GITHUB_STEP_SUMMARY"
 
       # These short-lived artifacts only transport structured shard data to
@@ -474,12 +484,30 @@ jobs:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
           ref: ${{ env.LLGO_REF }}
 
+      - name: Resolve target Go versions
+        id: target-go
+        shell: bash
+        run: |
+          source dev/go_toolchain.sh
+          echo "go126=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)" >> "$GITHUB_OUTPUT"
+          echo "go127=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)" >> "$GITHUB_OUTPUT"
+
       - name: Install dependencies
         uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
 
       - name: Set up Emscripten
+        id: emsdk
+        continue-on-error: true
+        uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: '6.0.8'
+
+      # SDK downloads occasionally return HTTP 500. A second failed attempt
+      # still fails the job and leaves the unexecuted shard visible in reports.
+      - name: Retry Emscripten setup
+        if: ${{ !cancelled() && steps.emsdk.outcome == 'failure' }}
         uses: emscripten-core/setup-emsdk@v15
         with:
           version: '6.0.8'
@@ -492,30 +520,19 @@ jobs:
       - name: Set up Binaryen
         uses: ./.github/actions/setup-binaryen
 
-      - name: Restore Wasmer cache
+      - name: Install Wasmer llgo-v7.5.0.2
         if: matrix.wasm_profile == 'W32-WASI'
-        uses: ./.github/actions/setup-llgo-cache
-        with:
-          build-cache-mode: 'off'
-          crosscompile-cache-mode: 'off'
-          wasmer-cache-mode: readwrite
-
-      - name: Install Wasmer for W32
-        if: matrix.wasm_profile == 'W32-WASI'
-        run: bash dev/install_wasmer.sh
-      - name: Use qualified Wasmer PR 3 for this PR
-        if: github.event_name == 'pull_request' && matrix.wasm_profile == 'W32-WASI'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          package="$RUNNER_TEMP/wasmer-pr3"
-          gh run download 37578522115 --repo xgo-dev/wasmer \
-            --name wasmer-linux-amd64 --dir "$package"
+          package="$RUNNER_TEMP/wasmer-llgo-v7.5.0.2"
+          gh release download llgo-v7.5.0.2 --repo xgo-dev/wasmer \
+            --pattern wasmer-linux-amd64.tar.gz --dir "$package"
           (
             cd "$package"
-            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            echo '7878597d48f7e2435b8da1f43e11499fc3073dc0191a6c74c00c27f33849f179  wasmer-linux-amd64.tar.gz' | sha256sum --check
             tar -xzf wasmer-linux-amd64.tar.gz
-            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+            test "$(cat REVISION)" = "7692163d5f320ba0d475b2f848f36c1e1bcbdd57"
           )
           chmod +x "$package/bin/wasmer"
           "$package/bin/wasmer" --version -v
@@ -540,14 +557,6 @@ jobs:
           llgo="$RUNNER_TEMP/llgo-bin/llgo"
           echo "LLGO_GOROOT_RUNNER=$runner" >> "$GITHUB_ENV"
           echo "LLGO_TEST_LLGO=$llgo" >> "$GITHUB_ENV"
-
-      - name: Resolve target Go versions
-        id: target-go
-        shell: bash
-        run: |
-          source dev/go_toolchain.sh
-          echo "go126=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)" >> "$GITHUB_OUTPUT"
-          echo "go127=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)" >> "$GITHUB_OUTPUT"
 
       - name: Set up target Go 1.26
         if: steps.target-go.outputs.go126 != steps.build-tools.outputs.go-version
@@ -684,14 +693,43 @@ jobs:
             return "${pipeline_status[0]}"
           }
 
-          run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
-          pids=("$!")
-          run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
-          pids+=("$!")
+          # The complete GOROOT filesystem walk competes with the paired
+          # compiler on Emscripten32. Detect it from either version's shard.
+          serial_versions=0
+          if [[ "${{ matrix.wasm_profile }}" == "J32-Emscripten" ]]; then
+            for selection in "${{ steps.go126.outputs.version }}:$shard_index" "${{ steps.go127.outputs.version }}:$paired_shard_index"; do
+              version=${selection%:*}
+              target_shard=${selection##*:}
+              target_goroot=$GO126_GOROOT
+              if [[ "$version" == "${{ steps.go127.outputs.version }}" ]]; then
+                target_goroot=$GO127_GOROOT
+              fi
+              case_list="$RUNNER_TEMP/goroot-serial-go${version}.txt"
+              "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' -test.count=1 \
+                -goroot "$target_goroot" -directive-mode ci \
+                -wasm-profile "${{ matrix.wasm_profile }}" -list-case-paths \
+                -shard-index "$target_shard" -shard-total "$LLGO_GOROOT_SHARD_TOTAL" \
+                >"$case_list" 2>&1
+              if grep -Eq '(^|[[:space:]])winbatch\.go$' "$case_list"; then
+                echo "Serializing Go versions for winbatch.go in Go $version shard $target_shard/$LLGO_GOROOT_SHARD_TOTAL"
+                serial_versions=1
+              fi
+              rm -f "$case_list"
+            done
+          fi
           status=0
-          for pid in "${pids[@]}"; do
-            wait "$pid" || status=1
-          done
+          if (( serial_versions )); then
+            run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" || status=1
+            run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" || status=1
+          else
+            run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
+            pids=("$!")
+            run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
+            pids+=("$!")
+            for pid in "${pids[@]}"; do
+              wait "$pid" || status=1
+            done
+          fi
           exit "$status"
 
       - name: Summarize GOROOT shard
@@ -699,8 +737,8 @@ jobs:
         shell: bash
         env:
           SHARD_INDEX: ${{ matrix.shard-index }}
-          GO126_VERSION: ${{ steps.go126.outputs.version }}
-          GO127_VERSION: ${{ steps.go127.outputs.version }}
+          GO126_VERSION: ${{ steps.go126.outputs.version || steps.target-go.outputs.go126 || '1.26' }}
+          GO127_VERSION: ${{ steps.go127.outputs.version || steps.target-go.outputs.go127 || '1.27' }}
         run: |
           report_dir="$RUNNER_TEMP/goroot-report"
           mkdir -p "$report_dir" "$RUNNER_TEMP/goroot-logs"
@@ -708,13 +746,13 @@ jobs:
           platform="${{ matrix.wasm_profile }}"
 
           summarize_log() {
-            local go_version=$1
+            local go_version=$1 fallback_shard=$2
             local log="$RUNNER_TEMP/goroot-logs/go${go_version}.log"
             local selected observed failed skipped passed report_id shard_info actual_shard shard_total
             touch "$log"
             shard_info=$(sed -nE 's/.* shard=([0-9]+)\/([0-9]+) cases=.*/\1 \2/p' "$log" | tail -1)
             read -r actual_shard shard_total <<<"$shard_info"
-            actual_shard=${actual_shard:-$SHARD_INDEX}
+            actual_shard=${actual_shard:-$fallback_shard}
             shard_total=${shard_total:-$LLGO_GOROOT_SHARD_TOTAL}
             selected=$(sed -nE 's/.* shard=[^ ]+ cases=([0-9]+) directive_mode=.*/\1/p' "$log" | tail -1)
             observed=$(grep -Ec -- '--- (PASS|FAIL|SKIP): TestGoRootRunCases/' "$log" || true)
@@ -748,7 +786,10 @@ jobs:
             echo '_Passed means the runner classification succeeded; expected xfail/not-applicable failures and classified flakes are counted as Passed._'
             echo
             echo '**Failed case paths**'
-            if [[ "$failed" -eq 0 ]]; then
+            if [[ "$selected" == '?' ]]; then
+              echo
+              echo '- Case selection was not reached; inspect the setup/run failure above.'
+            elif [[ "$failed" -eq 0 ]]; then
               echo
               echo '- none'
             else
@@ -758,9 +799,10 @@ jobs:
           }
 
           {
-            summarize_log "$GO126_VERSION"
+            summarize_log "$GO126_VERSION" "$SHARD_INDEX"
             echo
-            summarize_log "$GO127_VERSION"
+            paired_shard=$(((SHARD_INDEX + LLGO_GOROOT_SHARD_TOTAL / 2) % LLGO_GOROOT_SHARD_TOTAL))
+            summarize_log "$GO127_VERSION" "$paired_shard"
           } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Upload GOROOT shard statistics

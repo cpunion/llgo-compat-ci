@@ -90,7 +90,19 @@ class CoverageTests(unittest.TestCase):
         rows[1].pop()
         errors = self.check_rows(rows)
         self.assertTrue(any("nine TSV columns" in error for error in errors))
-        self.assertTrue(any("invalid literal" in error for error in errors))
+        self.assertTrue(any("case selection was not reached" in error for error in errors))
+        self.assertTrue(any("darwin/arm64 · Go 1.26.7 · shard 0/8" in error for error in errors))
+
+    def test_goroot_setup_failures_remain_missing_shards_for_both_versions(self):
+        rows = self.goroot_rows()
+        for row in rows:
+            if row[0] == "J32-GoJS" and row[2] == "1":
+                row[3:8] = ["?", "0", "0", "0", "0"]
+        errors = self.check_rows(rows)
+        self.assertEqual(4, len(errors))
+        for version in self.versions:
+            self.assertTrue(any(f"Go {version} · shard 1/8" in error for error in errors))
+            self.assertTrue(any(f"Go {version}: corpus coverage is 7/8" in error for error in errors))
 
     def test_std_full_report_set(self):
         errors, description = check_std(*self.make_std_reports())
