@@ -1,0 +1,256 @@
+name: GOROOT remaining failure replay
+
+on:
+  push:
+    branches: [codex/goroot-remaining-replay-20261016]
+  workflow_dispatch:
+    inputs:
+      llgo_repository:
+        description: LLGo repository
+        type: string
+        default: xgo-dev/llgo
+      llgo_ref:
+        description: LLGo commit to test
+        type: string
+        default: 38bfd05ee102e36710a2df5bca47834a622b667c
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  LLGO_REF: ${{ inputs.llgo_ref || '38bfd05ee102e36710a2df5bca47834a622b667c' }}
+
+jobs:
+  replay:
+    name: Replay (${{ matrix.platform }})
+    timeout-minutes: 180
+    outputs:
+      expected-reports: ${{ steps.report-count.outputs.count }}
+    env:
+      GOPROXY: https://proxy.golang.org,direct
+      LLGO_GOROOT_HEARTBEAT_SECONDS: "60"
+      # Leave thirty minutes for setup plus timeout diagnostics and artifacts.
+      LLGO_GOROOT_TEST_TIMEOUT: "150m"
+      LLGO_GOROOT_VERBOSE: "1"
+      LLGO_GOROOT_SHARD_TOTAL: ${{ matrix.shard-total }}
+    strategy:
+      fail-fast: false
+      matrix: {"include": [{"platform": "windows-msvc/386", "os": "windows-2022", "windows_abi": "msvc", "windows_arch": "386", "wasm_profile": "", "cases": "^(cmplxdivide\\.go|fixedbugs/issue39541\\.go)$", "shard-index": "0", "shard-total": "1"}, {"platform": "windows-mingw/386", "os": "windows-2022", "windows_abi": "mingw", "windows_arch": "386", "wasm_profile": "", "cases": "^(cmplxdivide\\.go|fixedbugs/issue39541\\.go)$", "shard-index": "0", "shard-total": "1"}, {"platform": "darwin/amd64", "os": "macos-15-intel", "windows_abi": "", "windows_arch": "", "wasm_profile": "", "cases": "^ken/chan\\.go$", "shard-index": "0", "shard-total": "1"}, {"platform": "J32-Emscripten", "os": "ubuntu-24.04", "windows_abi": "", "windows_arch": "", "wasm_profile": "J32-Emscripten", "cases": "^winbatch\\.go$", "shard-index": "0", "shard-total": "1"}]}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Record expected matrix reports
+        id: report-count
+        shell: bash
+        env:
+          MATRIX_JOB_TOTAL: ${{ strategy.job-total }}
+        # Each configured job reports Go 1.26 and Go 1.27, even when it runs
+        # selected subshards of a larger corpus partition.
+        run: echo "count=$((MATRIX_JOB_TOTAL * 2))" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ env.LLGO_REF }}
+
+      - name: Resolve target Go versions
+        id: target-go
+        shell: bash
+        run: |
+          source dev/go_toolchain.sh
+          echo "go126=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.26)" >> "$GITHUB_OUTPUT"
+          echo "go127=$(llgo_resolve_go_version "$GITHUB_WORKSPACE" 1.27)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out Intel LLVM setup
+        if: matrix.platform == 'darwin/amd64'
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
+        if: matrix.platform == 'darwin/amd64'
+
+      - name: Install dependencies
+        uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+          install-llvm: ${{ matrix.platform != 'darwin/amd64' }}
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+
+      - name: Set up Go for building LLGo and the runner
+        uses: ./.github/actions/setup-go
+        with:
+          architecture: ${{ matrix.os == 'windows-11-arm' && 'arm64' || startsWith(matrix.os, 'windows') && 'x64' || '' }}
+
+      - uses: emscripten-core/setup-emsdk@v15
+        if: matrix.wasm_profile != ''
+        with:
+          version: '6.0.8'
+      - uses: ./.github/actions/setup-binaryen
+        if: matrix.wasm_profile != ''
+
+      - name: Build LLGo and the GOROOT runner
+        id: build-tools
+        shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
+        run: |
+          LLGO_BUILD_GOROOT_RUNNER=1 dev/build_ci_tools.sh "$RUNNER_TEMP/llgo-bin"
+
+          build_version="$(go env GOVERSION)"
+          build_version="${build_version#go}"
+          echo "go-version=$build_version" >> "$GITHUB_OUTPUT"
+          echo "goroot=$(go env GOROOT)" >> "$GITHUB_OUTPUT"
+          echo "LLGO_BUILD_GO_VERSION=$build_version" >> "$GITHUB_ENV"
+
+          tool_suffix=
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            tool_suffix=.exe
+          fi
+          runner="$RUNNER_TEMP/llgo-bin/goroot-runner${tool_suffix}"
+          llgo="$RUNNER_TEMP/llgo-bin/llgo${tool_suffix}"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            # The shell launches the runner, while the Go runner launches
+            # llgo through the native Windows process API.
+            llgo="$(cygpath -w "$llgo")"
+          fi
+          echo "LLGO_GOROOT_RUNNER=$runner" >> "$GITHUB_ENV"
+          echo "LLGO_TEST_LLGO=$llgo" >> "$GITHUB_ENV"
+
+      # The toolchain module downloaded through GOTOOLCHAIN omits GOROOT/test.
+      # Install the complete distribution after building LLGo and the runner,
+      # so those binaries always use .go-version while the corpus can vary.
+      - name: Set up target Go 1.26
+        if: steps.target-go.outputs.go126 != steps.build-tools.outputs.go-version
+        uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ steps.target-go.outputs.go126 }}
+          architecture: ${{ matrix.os == 'windows-11-arm' && 'arm64' || startsWith(matrix.os, 'windows') && 'x64' || '' }}
+          cache: false
+
+      - name: Select Go 1.26 GOROOT
+        id: go126
+        shell: bash
+        env:
+          BUILD_GOROOT: ${{ steps.build-tools.outputs.goroot }}
+          BUILD_VERSION: ${{ steps.build-tools.outputs.go-version }}
+          TARGET_VERSION: ${{ steps.target-go.outputs.go126 }}
+        run: |
+          target_goroot="$(go env GOROOT)"
+          if [[ "$TARGET_VERSION" == "$BUILD_VERSION" ]]; then
+            target_goroot="$BUILD_GOROOT"
+          fi
+          if [[ ! -d "$target_goroot/test" ]]; then
+            echo "Target Go distribution does not contain GOROOT/test: $target_goroot" >&2
+            exit 1
+          fi
+          echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "goroot=$target_goroot" >> "$GITHUB_OUTPUT"
+
+      - name: Set up target Go 1.27
+        if: steps.target-go.outputs.go127 != steps.build-tools.outputs.go-version
+        uses: ./.github/actions/setup-go
+        with:
+          go-version: ${{ steps.target-go.outputs.go127 }}
+          architecture: ${{ matrix.os == 'windows-11-arm' && 'arm64' || startsWith(matrix.os, 'windows') && 'x64' || '' }}
+          cache: false
+
+      - name: Select Go 1.27 GOROOT
+        id: go127
+        shell: bash
+        env:
+          BUILD_GOROOT: ${{ steps.build-tools.outputs.goroot }}
+          BUILD_VERSION: ${{ steps.build-tools.outputs.go-version }}
+          TARGET_VERSION: ${{ steps.target-go.outputs.go127 }}
+        run: |
+          target_goroot="$(go env GOROOT)"
+          if [[ "$TARGET_VERSION" == "$BUILD_VERSION" ]]; then
+            target_goroot="$BUILD_GOROOT"
+          fi
+          if [[ ! -d "$target_goroot/test" ]]; then
+            echo "Target Go distribution does not contain GOROOT/test: $target_goroot" >&2
+            exit 1
+          fi
+          echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "goroot=$target_goroot" >> "$GITHUB_OUTPUT"
+
+      - name: Activate native Windows target
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/activate-windows-target
+        with:
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+
+      - name: Verify native target identity
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          target_os=$(go env GOOS)
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            target_os="windows-${LLGO_WINDOWS_ABI}"
+          fi
+          actual="$target_os/$(go env GOARCH)"
+          if [[ "$actual" != "$TARGET_PLATFORM" ]]; then
+            echo "error: target is $actual, expected $TARGET_PLATFORM" >&2
+            exit 1
+          fi
+
+      - name: Show toolchain versions
+        shell: bash
+        env:
+          GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
+          GO127_GOROOT: ${{ steps.go127.outputs.goroot }}
+        run: |
+          echo "LLGo build toolchain: $LLGO_BUILD_GO_VERSION"
+          for target_goroot in "$GO126_GOROOT" "$GO127_GOROOT"; do
+            target_go="$target_goroot/bin/go"
+            if [[ "$RUNNER_OS" == Windows ]]; then
+              target_go+=.exe
+            fi
+            "$target_go" version
+          done
+          go env GOPROXY GOMODCACHE
+          clang --version
+
+      - name: Measure original cases with diagnostic deadlines
+        shell: bash
+        env:
+          CASES: ${{ matrix.cases }}
+          WASM_PROFILE: ${{ matrix.wasm_profile }}
+          GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
+          GO127_GOROOT: ${{ steps.go127.outputs.goroot }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/replay"
+          printf 'timeouts: []\nflakes: []\nxfails: []\n' > "$RUNNER_TEMP/replay/expectations.yaml"
+          export LLGO_ROOT="$GITHUB_WORKSPACE"
+          if [[ "$RUNNER_OS" == Windows ]]; then export LLGO_STDIO_NOBUF=1; fi
+          status=0
+          for version in 126 127; do
+            root_var="GO${version}_GOROOT"
+            root="${!root_var}"
+            set +e
+            (
+              cd test/goroot
+              env GOMAXPROCS=2 GOTOOLCHAIN=local XDG_CACHE_HOME="$RUNNER_TEMP/replay/cache-go${version}" \
+                "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' \
+                -test.v -test.count=1 -test.timeout=35m -goroot "$root" \
+                -directive-mode ci -case "$CASES" -wasm-profile "$WASM_PROFILE" \
+                -build-timeout 10m -run-timeout 10m \
+                -xfail "$RUNNER_TEMP/replay/expectations.yaml" -keepwork -progress 30s \
+                -max-rss-mib 4096 -min-swap-free-mib 0
+            ) 2>&1 | tee "$RUNNER_TEMP/replay/go${version}.log"
+            codes=("${PIPESTATUS[@]}")
+            set -e
+            if [[ "${codes[0]}" != 0 ]]; then status=1; fi
+          done
+          exit "$status"
+      - name: Preserve replay logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: remaining-replay-${{ matrix.os }}-${{ matrix.windows_abi }}
+          path: ${{ runner.temp }}/replay/*.log
