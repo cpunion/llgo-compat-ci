@@ -82,6 +82,9 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
           go build -tags=llvm22,dev -o "$RUNNER_TEMP/core-tools/llgo$suffix" ./cmd/llgo
           go test -c -o "$RUNNER_TEMP/core-tools/goroot-runner$suffix" ./test/goroot
+      - uses: ./compatibility-ci/.github/actions/setup-goroot-policy
+        id: goroot-policy
+        if: matrix.wasm_profile == 'W32-WASI'
       - name: Resolve the target Go version
         id: target-go
         shell: bash
@@ -134,6 +137,7 @@ jobs:
           CASES: ${{ matrix.cases }}
           WASM_PROFILE: ${{ matrix.wasm_profile }}
           EXPECTED_CASES: ${{ join(matrix.case_paths, ',') }}
+          GOROOT_XFAIL: ${{ steps.goroot-policy.outputs.xfail || 'test/goroot/xfail.yaml' }}
         run: |
           export LLGO_ROOT="$PWD"
           suffix=
@@ -162,6 +166,7 @@ jobs:
               -test.run='^TestGoRootRunCases$' -test.count=1 -test.v -test.timeout=20m \
               -goroot "$target_goroot" -directive-mode ci \
               -case "$CASES" -wasm-profile "$WASM_PROFILE" -min-swap-free-mib="$min_swap_free_mib" -keepwork \
+              -xfail "$GOROOT_XFAIL" \
               -max-rss-mib="$max_rss_mib" \
               2>&1 | tee "$RUNNER_TEMP/core-regressions.log"
           )

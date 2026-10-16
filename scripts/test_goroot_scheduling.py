@@ -77,6 +77,7 @@ class SchedulingTests(unittest.TestCase):
                        GO126_GOROOT=str(root / VERSIONS[0]), GO127_GOROOT=str(root / VERSIONS[1]),
                        PAIRED_SHARD_INDEX="5", LLGO_GOROOT_SHARD_TOTAL="16" if profile else "8",
                        LLGO_GOROOT_TEST_TIMEOUT="150m", LLGO_GOROOT_RUNNER=str(runner),
+                       GOROOT_XFAIL="/mock/wasi-policy.yaml" if profile == "W32-WASI" else "test/goroot/xfail.yaml",
                        FAKE_EVENTS=str(events), FAKE_CASES=json.dumps(cases or {}),
                        FAKE_PARALLEL="0" if serial else "1", FAKE_RUN_FAILURE=run_failure,
                        FAKE_SELECTION_FAILURE=selection_failure)
@@ -103,6 +104,8 @@ class SchedulingTests(unittest.TestCase):
             self.assertIn("-test.timeout=150m", record["args"])
             self.assertNotIn("-case", record["args"])
             self.assertNotIn("-run-timeout", record["args"])
+            if profile:
+                self.assertEqual(env["GOROOT_XFAIL"], record["args"][record["args"].index("-xfail") + 1])
         return records
 
     def test_windows_386_stress_in_either_go_version(self):

@@ -6,6 +6,7 @@ on:
       - .github/workflows/goroot.yml
       - .github/workflows/regressions.yml
       - .github/actions/setup-macos-intel-llvm/**
+      - .github/actions/setup-goroot-policy/**
       - scripts/**
   workflow_dispatch:
     inputs:
@@ -558,6 +559,15 @@ jobs:
           echo "LLGO_GOROOT_RUNNER=$runner" >> "$GITHUB_ENV"
           echo "LLGO_TEST_LLGO=$llgo" >> "$GITHUB_ENV"
 
+      # Policy tools use the build Go before selecting an older corpus Go.
+      - uses: actions/checkout@v7
+        if: matrix.wasm_profile == 'W32-WASI'
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-goroot-policy
+        id: goroot-policy
+        if: matrix.wasm_profile == 'W32-WASI'
+
       - name: Set up target Go 1.26
         if: steps.target-go.outputs.go126 != steps.build-tools.outputs.go-version
         uses: ./.github/actions/setup-go
@@ -631,6 +641,7 @@ jobs:
           GOTOOLCHAIN: local
           GO126_GOROOT: ${{ steps.go126.outputs.goroot }}
           GO127_GOROOT: ${{ steps.go127.outputs.goroot }}
+          GOROOT_XFAIL: ${{ steps.goroot-policy.outputs.xfail || 'test/goroot/xfail.yaml' }}
         run: |
           mkdir -p "$RUNNER_TEMP/goroot-logs" "$RUNNER_TEMP/goroot-cache"
           shard_index=${{ matrix.shard-index }}
@@ -683,6 +694,7 @@ jobs:
                 -goroot "$target_goroot" \
                 -directive-mode ci \
                 -wasm-profile "${{ matrix.wasm_profile }}" \
+                -xfail "$GOROOT_XFAIL" \
                 -max-rss-mib "$max_rss_mib" \
                 -progress 60s \
                 -shard-index "$target_shard" \
