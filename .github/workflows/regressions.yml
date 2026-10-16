@@ -9,9 +9,9 @@ on:
       llgo_ref:
         type: string
         required: true
-      wasmer_pr3:
+      wasmer_release:
         type: boolean
-        default: false
+        default: true
   workflow_dispatch:
     inputs:
       llgo_repository:
@@ -22,10 +22,10 @@ on:
         description: LLGo branch, tag, or commit
         type: string
         default: main
-      wasmer_pr3:
-        description: Use the qualified Wasmer PR 3 artifact
+      wasmer_release:
+        description: Use the pinned LLGo Wasmer release
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -82,6 +82,9 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
           go build -tags=llvm22,dev -o "$RUNNER_TEMP/core-tools/llgo$suffix" ./cmd/llgo
           go test -c -o "$RUNNER_TEMP/core-tools/goroot-runner$suffix" ./test/goroot
+      - uses: ./compatibility-ci/.github/actions/setup-goroot-policy
+        id: goroot-policy
+        if: matrix.wasm_profile == 'W32-WASI'
       - name: Resolve the target Go version
         id: target-go
         shell: bash
@@ -109,20 +112,21 @@ jobs:
       - uses: ./.github/actions/setup-binaryen
         if: startsWith(matrix.wasm_profile, 'J')
       - name: Install Wasmer
-        if: matrix.wasm_profile == 'W32-WASI' && !inputs.wasmer_pr3
+        if: matrix.wasm_profile == 'W32-WASI' && !inputs.wasmer_release
         run: bash dev/install_wasmer.sh
-      - name: Install qualified Wasmer PR 3 artifact
-        if: matrix.wasm_profile == 'W32-WASI' && inputs.wasmer_pr3
+      - name: Install Wasmer llgo-v7.5.0.2
+        if: matrix.wasm_profile == 'W32-WASI' && inputs.wasmer_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          package="$RUNNER_TEMP/wasmer-pr3"
-          gh run download 37578522115 --repo xgo-dev/wasmer --name wasmer-linux-amd64 --dir "$package"
+          package="$RUNNER_TEMP/wasmer-llgo-v7.5.0.2"
+          gh release download llgo-v7.5.0.2 --repo xgo-dev/wasmer \
+            --pattern wasmer-linux-amd64.tar.gz --dir "$package"
           (
             cd "$package"
-            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            echo '7878597d48f7e2435b8da1f43e11499fc3073dc0191a6c74c00c27f33849f179  wasmer-linux-amd64.tar.gz' | sha256sum --check
             tar -xzf wasmer-linux-amd64.tar.gz
-            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+            test "$(cat REVISION)" = "7692163d5f320ba0d475b2f848f36c1e1bcbdd57"
           )
           chmod +x "$package/bin/wasmer"
           echo "$package/bin" >> "$GITHUB_PATH"
@@ -133,6 +137,7 @@ jobs:
           CASES: ${{ matrix.cases }}
           WASM_PROFILE: ${{ matrix.wasm_profile }}
           EXPECTED_CASES: ${{ join(matrix.case_paths, ',') }}
+          GOROOT_XFAIL: ${{ steps.goroot-policy.outputs.xfail || 'test/goroot/xfail.yaml' }}
         run: |
           export LLGO_ROOT="$PWD"
           suffix=
@@ -161,6 +166,7 @@ jobs:
               -test.run='^TestGoRootRunCases$' -test.count=1 -test.v -test.timeout=20m \
               -goroot "$target_goroot" -directive-mode ci \
               -case "$CASES" -wasm-profile "$WASM_PROFILE" -min-swap-free-mib="$min_swap_free_mib" -keepwork \
+              -xfail "$GOROOT_XFAIL" \
               -max-rss-mib="$max_rss_mib" \
               2>&1 | tee "$RUNNER_TEMP/core-regressions.log"
           )

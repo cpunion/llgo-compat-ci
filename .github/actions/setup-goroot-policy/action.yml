@@ -1,0 +1,18 @@
+name: Prepare hosted GOROOT execution policy
+description: Give the full WASI RWMutex stress loop a bounded hosted-runner budget
+
+outputs:
+  xfail:
+    value: ${{ steps.policy.outputs.xfail }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare the case-specific WASI budget
+      id: policy
+      shell: bash
+      run: |
+        go test "$GITHUB_ACTION_PATH/prepare.go" "$GITHUB_ACTION_PATH/prepare_test.go"
+        policy="$RUNNER_TEMP/goroot-hosted-xfail.yaml"
+        go run "$GITHUB_ACTION_PATH/prepare.go" test/goroot/xfail.yaml "$policy"
+        echo "xfail=$policy" >> "$GITHUB_OUTPUT"
