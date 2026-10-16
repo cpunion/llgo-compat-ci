@@ -1,10 +1,11 @@
 name: GOROOT remaining failure replay
 
 on:
-  push:
-    branches: [codex/goroot-remaining-replay-20261016]
   workflow_dispatch:
     inputs:
+      matrix:
+        description: JSON matrix for selected replays
+        type: string
       llgo_repository:
         description: LLGo repository
         type: string
@@ -36,7 +37,8 @@ jobs:
       LLGO_GOROOT_SHARD_TOTAL: ${{ matrix.shard-total }}
     strategy:
       fail-fast: false
-      matrix: {"include": [{"platform": "windows-msvc/386", "os": "windows-2022", "windows_abi": "msvc", "windows_arch": "386", "wasm_profile": "", "cases": "^(cmplxdivide\\.go|fixedbugs/issue39541\\.go)$", "shard-index": "0", "shard-total": "1"}, {"platform": "windows-mingw/386", "os": "windows-2022", "windows_abi": "mingw", "windows_arch": "386", "wasm_profile": "", "cases": "^(cmplxdivide\\.go|fixedbugs/issue39541\\.go)$", "shard-index": "0", "shard-total": "1"}, {"platform": "darwin/amd64", "os": "macos-15-intel", "windows_abi": "", "windows_arch": "", "wasm_profile": "", "cases": "^ken/chan\\.go$", "shard-index": "0", "shard-total": "1"}, {"platform": "J32-Emscripten", "os": "ubuntu-24.04", "windows_abi": "", "windows_arch": "", "wasm_profile": "J32-Emscripten", "cases": "^winbatch\\.go$", "shard-index": "0", "shard-total": "1"}]}
+      matrix: >-
+        ${{ fromJSON(inputs.matrix || '{"include": [{"platform": "windows-msvc/386", "os": "windows-2022", "windows_abi": "msvc", "windows_arch": "386", "wasm_profile": "", "cases": "^(cmplxdivide\\.go|fixedbugs/issue39541\\.go)$", "shard-index": "0", "shard-total": "1"}, {"platform": "windows-mingw/386", "os": "windows-2022", "windows_abi": "mingw", "windows_arch": "386", "wasm_profile": "", "cases": "^(cmplxdivide\\.go|fixedbugs/issue39541\\.go)$", "shard-index": "0", "shard-total": "1"}, {"platform": "darwin/amd64", "os": "macos-15-intel", "windows_abi": "", "windows_arch": "", "wasm_profile": "", "cases": "^ken/chan\\.go$", "shard-index": "0", "shard-total": "1"}, {"platform": "J32-Emscripten", "os": "ubuntu-24.04", "windows_abi": "", "windows_arch": "", "wasm_profile": "J32-Emscripten", "cases": "^winbatch\\.go$", "shard-index": "0", "shard-total": "1"}]}') }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Record expected matrix reports
@@ -185,6 +187,7 @@ jobs:
           windows-arch: ${{ matrix.windows_arch }}
 
       - name: Verify native target identity
+        if: matrix.wasm_profile == ''
         shell: bash
         env:
           TARGET_PLATFORM: ${{ matrix.platform }}
@@ -228,6 +231,9 @@ jobs:
           printf 'timeouts: []\nflakes: []\nxfails: []\n' > "$RUNNER_TEMP/replay/expectations.yaml"
           export LLGO_ROOT="$GITHUB_WORKSPACE"
           if [[ "$RUNNER_OS" == Windows ]]; then export LLGO_STDIO_NOBUF=1; fi
+          for name in $(compgen -e); do
+            case "$name" in GITHUB_*|ACTIONS_*) unset "$name" ;; esac
+          done
           status=0
           for version in 126 127; do
             root_var="GO${version}_GOROOT"
